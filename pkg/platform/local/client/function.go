@@ -17,6 +17,7 @@ limitations under the License.
 package client
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/nuclio/nuclio/pkg/functionconfig"
@@ -47,14 +48,14 @@ func newFunction(parentLogger logger.Logger,
 }
 
 // Initialize does nothing, seeing how no fields require lazy loading
-func (f *function) Initialize([]string) error {
+func (f *function) Initialize(context.Context, []string) error {
 	var err error
 
 	return err
 }
 
 // GetInvokeURL gets the IP of the cluster hosting the function
-func (f *function) GetInvokeURL(invokeViaType platform.InvokeViaType) (string, error) {
+func (f *function) GetInvokeURL(ctx context.Context, invokeViaType platform.InvokeViaType) (string, error) {
 	host, port, err := f.GetExternalIPInvocationURL()
 	if err != nil {
 		return "", errors.Wrap(err, "Failed to get external IP invocation URL")

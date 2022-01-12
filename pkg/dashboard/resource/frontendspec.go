@@ -40,10 +40,12 @@ func (fsr *frontendSpecResource) ExtendMiddlewares() error {
 }
 
 func (fsr *frontendSpecResource) getFrontendSpec(request *http.Request) (*restful.CustomRouteFuncResponse, error) {
+	ctx := request.Context()
 	externalIPAddresses, err := fsr.getPlatform().GetExternalIPAddresses()
 	if err != nil {
 		externalIPAddresses = []string{"localhost"}
-		fsr.Logger.WarnWith("Failed to get external IP addresses, falling back to default",
+		fsr.Logger.WarnWithCtx(ctx,
+			"Failed to get external IP addresses, falling back to default",
 			"err", err,
 			"externalIPAddresses", externalIPAddresses)
 	}
@@ -108,6 +110,7 @@ func (fsr *frontendSpecResource) getDefaultFunctionConfig() map[string]interface
 	defaultWorkerAvailabilityTimeoutMilliseconds := trigger.DefaultWorkerAvailabilityTimeoutMilliseconds
 
 	defaultFunctionNodeSelector := fsr.resolveDefaultFunctionNodeSelector()
+	defaultFunctionTolerations := fsr.resolveDefaultFunctionTolerations()
 	defaultFunctionPriorityClassName := fsr.resolveDefaultFunctionPriorityClassName()
 	defaultServiceType := fsr.resolveDefaultServiceType()
 	defaultHTTPTrigger := functionconfig.GetDefaultHTTPTrigger()
@@ -122,6 +125,7 @@ func (fsr *frontendSpecResource) getDefaultFunctionConfig() map[string]interface
 		ReadinessTimeoutSeconds: fsr.resolveFunctionReadinessTimeoutSeconds(),
 		NodeSelector:            defaultFunctionNodeSelector,
 		PriorityClassName:       defaultFunctionPriorityClassName,
+		Tolerations:             defaultFunctionTolerations,
 		TargetCPU:               abstract.DefaultTargetCPU,
 		Triggers: map[string]functionconfig.Trigger{
 
@@ -145,7 +149,7 @@ func (fsr *frontendSpecResource) getDefaultFunctionConfig() map[string]interface
 	return map[string]interface{}{"attributes": functionconfig.Config{Spec: defaultFunctionSpec}}
 }
 
-// returns a list of custom routes for the resource
+// GetCustomRoutes returns a list of custom routes for the resource
 func (fsr *frontendSpecResource) GetCustomRoutes() ([]restful.CustomRoute, error) {
 
 	// since frontendSpec is a singleton we create a custom route that will return this single object
@@ -180,6 +184,14 @@ func (fsr *frontendSpecResource) resolveDefaultFunctionNodeSelector() map[string
 		defaultNodeSelector = dashboardServer.GetPlatformConfiguration().Kube.DefaultFunctionNodeSelector
 	}
 	return defaultNodeSelector
+}
+
+func (fsr *frontendSpecResource) resolveDefaultFunctionTolerations() []v1.Toleration {
+	var defaultFunctionTolerations []v1.Toleration
+	if dashboardServer, ok := fsr.resource.GetServer().(*dashboard.Server); ok {
+		defaultFunctionTolerations = dashboardServer.GetPlatformConfiguration().Kube.DefaultFunctionTolerations
+	}
+	return defaultFunctionTolerations
 }
 
 func (fsr *frontendSpecResource) resolveDefaultFunctionPriorityClassName() string {

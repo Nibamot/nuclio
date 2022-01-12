@@ -1,4 +1,4 @@
-// +build test_unit
+//go:build test_unit
 
 /*
 Copyright 2017 The Nuclio Authors.
@@ -19,6 +19,7 @@ limitations under the License.
 package monitoring
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -41,11 +42,13 @@ type FunctionMonitoringTestSuite struct {
 	Namespace         string
 	Logger            logger.Logger
 	functionMonitor   *FunctionMonitor
+	ctx               context.Context
 }
 
 func (suite *FunctionMonitoringTestSuite) SetupSuite() {
 	var err error
 	suite.Namespace = "default-namespace"
+	suite.ctx = context.Background()
 	suite.Logger, err = nucliozap.NewNuclioZapTest("test")
 	suite.Require().NoError(err, "Failed to create logger")
 }
@@ -54,7 +57,8 @@ func (suite *FunctionMonitoringTestSuite) SetupTest() {
 	var err error
 	suite.kubeClientSet = fake.NewSimpleClientset()
 	suite.nuclioioClientSet = nuclioiofake.NewSimpleClientset()
-	suite.functionMonitor, err = NewFunctionMonitor(suite.Logger,
+	suite.functionMonitor, err = NewFunctionMonitor(suite.ctx,
+		suite.Logger,
 		suite.Namespace,
 		suite.kubeClientSet,
 		suite.nuclioioClientSet,
@@ -68,21 +72,22 @@ func (suite *FunctionMonitoringTestSuite) TestBulkCheckFunctionStatuses() {
 	for i := 0; i < 100; i++ {
 		function, err := suite.nuclioioClientSet.NuclioV1beta1().
 			NuclioFunctions(suite.Namespace).
-			Create(&nuclioio.NuclioFunction{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      fmt.Sprintf("func-%d", i),
-					Namespace: suite.Namespace,
-				},
-				Spec: functionconfig.Spec{},
-				Status: functionconfig.Status{
-					State: functionconfig.FunctionStateWaitingForResourceConfiguration,
-				},
-			})
+			Create(suite.ctx,
+				&nuclioio.NuclioFunction{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      fmt.Sprintf("func-%d", i),
+						Namespace: suite.Namespace,
+					},
+					Spec: functionconfig.Spec{},
+					Status: functionconfig.Status{
+						State: functionconfig.FunctionStateWaitingForResourceConfiguration,
+					},
+				}, metav1.CreateOptions{})
 		suite.Require().NoError(err)
 		suite.Require().NotNil(function)
 	}
 
-	err := suite.functionMonitor.checkFunctionStatuses()
+	err := suite.functionMonitor.checkFunctionStatuses(suite.ctx)
 	suite.Require().NoError(err)
 }
 

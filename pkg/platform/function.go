@@ -17,6 +17,7 @@ limitations under the License.
 package platform
 
 import (
+	"context"
 	"math/rand"
 	"strconv"
 
@@ -31,7 +32,7 @@ type Function interface {
 	// Initialize instructs the function to load the fields specified by "fields". Some function implementations
 	// are lazy-load - this ensures that the fields are populated properly. if "fields" is nil, all fields
 	// are loaded
-	Initialize([]string) error
+	Initialize(context.Context, []string) error
 
 	// GetConfig will return the configuration of the function
 	GetConfig() *functionconfig.Config
@@ -40,7 +41,7 @@ type Function interface {
 	GetStatus() *functionconfig.Status
 
 	// GetInvokeURL returns the URL on which the function can be invoked
-	GetInvokeURL(InvokeViaType) (string, error)
+	GetInvokeURL(context.Context, InvokeViaType) (string, error)
 
 	// GetReplicas returns the current # of replicas and the configured # of replicas
 	GetReplicas() (int, int)
@@ -78,7 +79,7 @@ func NewAbstractFunction(parentLogger logger.Logger,
 // Initialize instructs the function to load the fields specified by "fields". Some function implementations
 // are lazy-load - this ensures that the fields are populated properly. if "fields" is nil, all fields
 // are loaded
-func (af *AbstractFunction) Initialize([]string) error {
+func (af *AbstractFunction) Initialize(context.Context, []string) error {
 	return nil
 }
 
@@ -97,7 +98,7 @@ func (af *AbstractFunction) GetVersion() string {
 }
 
 // GetInvokeURL returns the URL on which the function can be invoked
-func (af *AbstractFunction) GetInvokeURL(InvokeViaType) (string, error) {
+func (af *AbstractFunction) GetInvokeURL(context.Context, InvokeViaType) (string, error) {
 	return "", errors.New("Unsupported")
 }
 

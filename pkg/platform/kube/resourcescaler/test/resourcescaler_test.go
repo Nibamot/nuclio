@@ -1,5 +1,4 @@
-// +build test_integration
-// +build test_kube
+//go:build test_integration && test_kube
 
 /*
 Copyright 2017 The Nuclio Authors.
@@ -40,7 +39,7 @@ import (
 	"github.com/v3io/scaler/pkg/scalertypes"
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/api/core/v1"
-	extensionsv1beta1 "k8s.io/api/extensions/v1beta1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stesting "k8s.io/client-go/testing"
@@ -91,6 +90,7 @@ func (suite *ResourceScalerTestSuite) SetupSuite() {
 	suite.Require().NoError(err)
 
 }
+
 func (suite *ResourceScalerTestSuite) SetupTest() {
 	suite.KubeTestSuite.SetupTest()
 
@@ -115,7 +115,7 @@ func (suite *ResourceScalerTestSuite) TearDownTest() {
 }
 
 func (suite *ResourceScalerTestSuite) TearDownSuite() {
-	err := suite.dlx.Stop(context.TODO())
+	err := suite.dlx.Stop(context.Background())
 	suite.Require().NoError(err, "Failed to stop DLX server")
 }
 
@@ -208,7 +208,7 @@ func (suite *ResourceScalerTestSuite) TestSanity() {
 		// reason dlx tries to reverse-proxy the request to the function by its service
 		// and since the dlx component is running as a process (and not as a POD)
 		// it fails to resolve the internal (kubernetes) function host
-		// TODO: make DLX work in "test" mode, where it invoke the function from within the k8s cluster
+		// Background: make DLX work in "test" mode, where it invoke the function from within the k8s cluster
 		//       see suite.KubectlInvokeFunctionViaCurl(functionName, "http://function-service-endpoint:8080")
 		responseBody, _, err := common.SendHTTPRequest(nil,
 			http.MethodGet,
@@ -309,7 +309,7 @@ func (suite *ResourceScalerTestSuite) TestMultiTargetScaleFromZero() {
 
 			apiGatewayName := "api-gateway-test"
 			createAPIGatewayOptions := suite.CompileCreateAPIGatewayOptions(apiGatewayName, functionName1, functionName2)
-			err := suite.DeployAPIGateway(createAPIGatewayOptions, func(*extensionsv1beta1.Ingress) {
+			err := suite.DeployAPIGateway(createAPIGatewayOptions, func(*networkingv1.Ingress) {
 				scaleToZero(functionName1)
 				scaleToZero(functionName2)
 
@@ -318,7 +318,7 @@ func (suite *ResourceScalerTestSuite) TestMultiTargetScaleFromZero() {
 				// reason dlx tries to reverse-proxy the request to the function by its service
 				// and since the dlx component is running as a process (and not as a POD)
 				// it fails to resolve the internal (kubernetes) function host
-				// TODO: make DLX work in "test" mode, where it invoke the function from within the k8s cluster
+				// Background: make DLX work in "test" mode, where it invoke the function from within the k8s cluster
 				//       see suite.KubectlInvokeFunctionViaCurl(functionName, "http://function-service-endpoint:8080")
 				responseBody, _, err := common.SendHTTPRequest(nil,
 					http.MethodGet,
@@ -353,7 +353,7 @@ func (suite *ResourceScalerTestSuite) TestMultiTargetScaleFromZero() {
 	})
 }
 
-func TestControllerTestSuite(t *testing.T) {
+func TestResourceScalerTestSuite(t *testing.T) {
 	if testing.Short() {
 		return
 	}

@@ -17,6 +17,7 @@ limitations under the License.
 package client
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -28,7 +29,7 @@ import (
 	"github.com/nuclio/logger"
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/api/core/v1"
-	extv1beta1 "k8s.io/api/extensions/v1beta1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -84,13 +85,13 @@ func NuclioioToFunctionConfig(nuclioioFunction *nuclioio.NuclioFunction) *functi
 }
 
 // Initialize loads sub-resources so we can populate our configuration
-func (f *Function) Initialize([]string) error {
+func (f *Function) Initialize(ctx context.Context, str []string) error {
 	var deploymentList *appsv1.DeploymentList
-	var ingressList *extv1beta1.IngressList
+	var ingressList *networkingv1.IngressList
 	var serviceList *v1.ServiceList
 
 	var deployment *appsv1.Deployment
-	var ingress *extv1beta1.Ingress
+	var ingress *networkingv1.Ingress
 	var service *v1.Service
 	var deploymentErr, ingressErr, serviceErr error
 
@@ -108,7 +109,7 @@ func (f *Function) Initialize([]string) error {
 		if deploymentList == nil {
 			deploymentList, deploymentErr = f.consumer.KubeClientSet.AppsV1().
 				Deployments(f.Config.Meta.Namespace).
-				List(listOptions)
+				List(ctx, listOptions)
 
 			if deploymentErr != nil {
 				return
@@ -132,7 +133,7 @@ func (f *Function) Initialize([]string) error {
 		if serviceList == nil {
 			serviceList, serviceErr = f.consumer.KubeClientSet.CoreV1().
 				Services(f.Config.Meta.Namespace).
-				List(listOptions)
+				List(ctx, listOptions)
 
 			if serviceErr != nil {
 				return
@@ -154,9 +155,9 @@ func (f *Function) Initialize([]string) error {
 	// get ingress info
 	go func() {
 		if ingressList == nil {
-			ingressList, ingressErr = f.consumer.KubeClientSet.ExtensionsV1beta1().
+			ingressList, ingressErr = f.consumer.KubeClientSet.NetworkingV1().
 				Ingresses(f.Config.Meta.Namespace).
-				List(listOptions)
+				List(ctx, listOptions)
 
 			if ingressErr != nil {
 				return
@@ -205,8 +206,8 @@ func (f *Function) Initialize([]string) error {
 }
 
 // GetInvokeURL returns the URL on which the function can be invoked
-func (f *Function) GetInvokeURL(invokeViaType platform.InvokeViaType) (string, error) {
-	host, port, path, err := f.getInvokeURLFields(invokeViaType)
+func (f *Function) GetInvokeURL(ctx context.Context, invokeViaType platform.InvokeViaType) (string, error) {
+	host, port, path, err := f.getInvokeURLFields(ctx, invokeViaType)
 	if err != nil {
 		return "", errors.Wrap(err, "Failed to get address")
 	}
@@ -232,7 +233,7 @@ func (f *Function) GetConfig() *functionconfig.Config {
 	}
 }
 
-func (f *Function) getInvokeURLFields(invokeViaType platform.InvokeViaType) (string, int, string, error) {
+func (f *Function) getInvokeURLFields(ctx context.Context, invokeViaType platform.InvokeViaType) (string, int, string, error) {
 	var host, path string
 	var port int
 	var err error
@@ -272,14 +273,14 @@ func (f *Function) getInvokeURLFields(invokeViaType platform.InvokeViaType) (str
 		host, port, path, err = urlGetter()
 
 		if err != nil {
-			f.Logger.DebugWith("Could not get invoke URL with method",
+			f.Logger.DebugWithCtx(ctx, "Could not get invoke URL with method",
 				"index", urlGetterIndex,
 				"err", err)
 		}
 
 		// if we found something, return it
 		if host != "" {
-			f.Logger.DebugWith("Resolved invoke URL with method",
+			f.Logger.DebugWithCtx(ctx, "Resolved invoke URL with method",
 				"index", urlGetterIndex,
 				"host", host,
 				"port", port,

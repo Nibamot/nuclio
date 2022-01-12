@@ -1,5 +1,4 @@
-// +build test_integration
-// +build test_kube
+//go:build test_integration && test_kube
 
 /*
 Copyright 2017 The Nuclio Authors.
@@ -48,7 +47,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	"k8s.io/api/core/v1"
-	extensionsv1beta1 "k8s.io/api/extensions/v1beta1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -137,7 +136,7 @@ func (suite *DeployFunctionTestSuite) TestDeployFailureBriefErrorMessage() {
 	defer suite.KubeClientSet.
 		CoreV1().
 		ConfigMaps(suite.Namespace).
-		Delete(platformConfigConfigmap.Name, &metav1.DeleteOptions{}) // nolint: errcheck
+		Delete(suite.Ctx, platformConfigConfigmap.Name, metav1.DeleteOptions{}) // nolint: errcheck
 
 	for _, testCase := range []struct {
 		Name                       string
@@ -223,7 +222,7 @@ AttributeError: module 'main' has no attribute 'expected_handler'
 				})
 			suite.Require().Error(err)
 
-			err = suite.Platform.DeleteFunction(&platform.DeleteFunctionOptions{
+			err = suite.Platform.DeleteFunction(suite.Ctx, &platform.DeleteFunctionOptions{
 				FunctionConfig: testCase.CreateFunctionOptions.FunctionConfig,
 			})
 			suite.Require().NoError(err)
@@ -240,22 +239,24 @@ func (suite *DeployFunctionTestSuite) TestVolumeOnceMountTwice() {
 	configMap, err := suite.KubeClientSet.
 		CoreV1().
 		ConfigMaps(suite.Namespace).
-		Create(&v1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      configMapName,
-				Namespace: suite.Namespace,
+		Create(suite.Ctx,
+			&v1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      configMapName,
+					Namespace: suite.Namespace,
+				},
+				Data: map[string]string{
+					"key": configMapData,
+				},
 			},
-			Data: map[string]string{
-				"key": configMapData,
-			},
-		})
+			metav1.CreateOptions{})
 	suite.Require().NoError(err)
 
 	// delete leftovers
 	defer suite.KubeClientSet.
 		CoreV1().
 		ConfigMaps(suite.Namespace).
-		Delete(configMap.Name, &metav1.DeleteOptions{}) // nolint: errcheck
+		Delete(suite.Ctx, configMap.Name, metav1.DeleteOptions{}) // nolint: errcheck
 
 	createFunctionOptions := suite.CompileCreateFunctionOptions(functionName)
 	createFunctionOptions.FunctionConfig.Spec.Volumes = []functionconfig.Volume{}
@@ -335,10 +336,11 @@ def handler(context, event):
 			"Resource version should be changed between deployments")
 
 		// we expect a failure due to a stale resource version
-		suite.DeployFunctionExpectError(createFunctionOptions, func(deployResult *platform.CreateFunctionResult) bool { // nolint: errcheck
-			suite.Require().Nil(deployResult, "Deployment results is nil when creation failed")
-			return true
-		})
+		suite.DeployFunctionExpectError(createFunctionOptions, // nolint: errcheck
+			func(deployResult *platform.CreateFunctionResult) bool {
+				suite.Require().Nil(deployResult, "Deployment results is nil when creation failed")
+				return true
+			})
 
 		return true
 	}
@@ -398,14 +400,14 @@ func (suite *DeployFunctionTestSuite) TestAssigningFunctionPodToNodes() {
 	testLabelKey := "test-nuclio.io"
 
 	labelPatch := fmt.Sprintf(`[{"op":"add","path":"/metadata/labels/%s","value":"%s"}]`, testLabelKey, "true")
-	_, err := suite.KubeClientSet.CoreV1().Nodes().Patch(testNodeName, types.JSONPatchType, []byte(labelPatch))
+	_, err := suite.KubeClientSet.CoreV1().Nodes().Patch(suite.Ctx, testNodeName, types.JSONPatchType, []byte(labelPatch), metav1.PatchOptions{})
 	suite.Require().NoError(err, "Failed to patch node labels")
 
 	// undo changes
 	defer func() {
 		suite.Logger.DebugWith("Rolling back node labels change")
 		labelPatch = fmt.Sprintf(`[{"op":"remove","path":"/metadata/labels/%s"}]`, testLabelKey)
-		_, err := suite.KubeClientSet.CoreV1().Nodes().Patch(testNodeName, types.JSONPatchType, []byte(labelPatch))
+		_, err := suite.KubeClientSet.CoreV1().Nodes().Patch(suite.Ctx, testNodeName, types.JSONPatchType, []byte(labelPatch), metav1.PatchOptions{})
 		suite.Require().NoError(err, "Failed to patch node labels")
 	}()
 
@@ -459,7 +461,7 @@ func (suite *DeployFunctionTestSuite) TestAssigningFunctionPodToNodes() {
 
 				if testCase.nodeSelector != nil {
 					pods := suite.GetFunctionPods(functionName)
-					podEvents, err := suite.KubeClientSet.CoreV1().Events(suite.Namespace).List(metav1.ListOptions{
+					podEvents, err := suite.KubeClientSet.CoreV1().Events(suite.Namespace).List(suite.Ctx, metav1.ListOptions{
 						FieldSelector: fmt.Sprintf("involvedObject.name=%s", pods[0].GetName()),
 					})
 					suite.Require().NoError(err)
@@ -657,13 +659,14 @@ func (suite *DeployFunctionTestSuite) createPlatformConfigmapWithJSONLogger() *v
 	platformConfigConfigmap, err := suite.KubeClientSet.
 		CoreV1().
 		ConfigMaps(suite.Namespace).
-		Create(&v1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "nuclio-platform-config",
-				Namespace: suite.Namespace,
-			},
-			Data: map[string]string{
-				"platform.yaml": `logger:
+		Create(suite.Ctx,
+			&v1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "nuclio-platform-config",
+					Namespace: suite.Namespace,
+				},
+				Data: map[string]string{
+					"platform.yaml": `logger:
   functions:
   - level: debug
     sink: myStdoutLoggerSink
@@ -678,8 +681,9 @@ func (suite *DeployFunctionTestSuite) createPlatformConfigmapWithJSONLogger() *v
   system:
   - level: debug
     sink: myStdoutLoggerSink`,
+				},
 			},
-		})
+			metav1.CreateOptions{})
 	suite.Require().NoError(err)
 
 	return platformConfigConfigmap
@@ -688,6 +692,7 @@ func (suite *DeployFunctionTestSuite) createPlatformConfigmapWithJSONLogger() *v
 func (suite *DeployFunctionTestSuite) TestCreateFunctionWithIngress() {
 	functionName := "func-with-ingress"
 	ingressHost := "something.com"
+	pathType := networkingv1.PathTypeImplementationSpecific
 	createFunctionOptions := suite.CompileCreateFunctionOptions(functionName)
 	createFunctionOptions.FunctionConfig.Spec.Triggers = map[string]functionconfig.Trigger{
 		"customTrigger": {
@@ -697,8 +702,9 @@ func (suite *DeployFunctionTestSuite) TestCreateFunctionWithIngress() {
 			Attributes: map[string]interface{}{
 				"ingresses": map[string]interface{}{
 					"someKey": map[string]interface{}{
-						"paths": []string{"/"},
-						"host":  ingressHost,
+						"paths":    []string{"/"},
+						"pathType": &pathType,
+						"host":     ingressHost,
 					},
 				},
 			},
@@ -713,7 +719,10 @@ func (suite *DeployFunctionTestSuite) TestCreateFunctionWithIngress() {
 			suite.WaitForFunctionState(&platform.GetFunctionsOptions{
 				Name:      functionName,
 				Namespace: suite.Namespace,
-			}, functionconfig.FunctionStateReady, time.Minute)
+			},
+				functionconfig.FunctionStateReady,
+				time.Minute,
+			)
 
 			functionIngress := suite.GetFunctionIngress(functionName)
 			suite.Require().Equal(ingressHost, functionIngress.Spec.Rules[0].Host)
@@ -779,11 +788,11 @@ func (suite *DeleteFunctionTestSuite) TestFailOnDeletingFunctionWithAPIGateways(
 	suite.DeployFunction(createFunctionOptions, func(deployResult *platform.CreateFunctionResult) bool {
 		apiGatewayName := "func-apigw"
 		createAPIGatewayOptions := suite.CompileCreateAPIGatewayOptions(apiGatewayName, functionName)
-		err := suite.DeployAPIGateway(createAPIGatewayOptions, func(ingress *extensionsv1beta1.Ingress) {
-			suite.Assert().Contains(ingress.Spec.Rules[0].IngressRuleValue.HTTP.Paths[0].Backend.ServiceName, functionName)
+		err := suite.DeployAPIGateway(createAPIGatewayOptions, func(ingress *networkingv1.Ingress) {
+			suite.Assert().Contains(ingress.Spec.Rules[0].IngressRuleValue.HTTP.Paths[0].Backend.Service.Name, functionName)
 
 			// try to delete the function while it uses this api gateway
-			err := suite.Platform.DeleteFunction(&platform.DeleteFunctionOptions{
+			err := suite.Platform.DeleteFunction(suite.Ctx, &platform.DeleteFunctionOptions{
 				FunctionConfig: createFunctionOptions.FunctionConfig,
 			})
 			suite.Assert().Equal(platform.ErrFunctionIsUsedByAPIGateways, errors.RootCause(err))
@@ -839,7 +848,7 @@ def handler(context, event):
 
 		// expect a failure due to a stale resource version
 		suite.Logger.Info("Deleting function")
-		err := suite.Platform.DeleteFunction(&platform.DeleteFunctionOptions{
+		err := suite.Platform.DeleteFunction(suite.Ctx, &platform.DeleteFunctionOptions{
 			FunctionConfig: deployResult.UpdatedFunctionConfig,
 		})
 		suite.Require().Error(err)
@@ -848,7 +857,7 @@ def handler(context, event):
 
 		// succeeded delete function
 		suite.Logger.Info("Deleting function")
-		err = suite.Platform.DeleteFunction(&platform.DeleteFunctionOptions{
+		err = suite.Platform.DeleteFunction(suite.Ctx, &platform.DeleteFunctionOptions{
 			FunctionConfig: deployResult.UpdatedFunctionConfig,
 		})
 		suite.Require().NoError(err)
@@ -863,6 +872,8 @@ type UpdateFunctionTestSuite struct {
 }
 
 func (suite *UpdateFunctionTestSuite) TestSanity() {
+	ctx := suite.Ctx
+
 	createFunctionOptions := suite.CompileCreateFunctionOptions("update-sanity")
 	createFunctionOptions.FunctionConfig.Meta.Labels = map[string]string{
 		"something": "here",
@@ -875,12 +886,12 @@ func (suite *UpdateFunctionTestSuite) TestSanity() {
 	zero := 0
 	createFunctionOptions.FunctionConfig.Spec.Disable = true
 	createFunctionOptions.FunctionConfig.Spec.Replicas = &zero
-	_, err := suite.Platform.CreateFunction(createFunctionOptions)
+	_, err := suite.Platform.CreateFunction(ctx, createFunctionOptions)
 	suite.Require().NoError(err, "Failed to create function")
 
 	// delete leftovers
 	defer func() {
-		err = suite.Platform.DeleteFunction(&platform.DeleteFunctionOptions{
+		err = suite.Platform.DeleteFunction(ctx, &platform.DeleteFunctionOptions{
 			FunctionConfig: createFunctionOptions.FunctionConfig,
 		})
 		suite.Require().NoError(err, "Failed to delete function")
@@ -891,7 +902,7 @@ func (suite *UpdateFunctionTestSuite) TestSanity() {
 	createFunctionOptions.FunctionConfig.Meta.Annotations["added-annotation"] = "added"
 
 	// update function
-	err = suite.Platform.UpdateFunction(&platform.UpdateFunctionOptions{
+	err = suite.Platform.UpdateFunction(ctx, &platform.UpdateFunctionOptions{
 		FunctionMeta: &createFunctionOptions.FunctionConfig.Meta,
 		FunctionSpec: &createFunctionOptions.FunctionConfig.Spec,
 	})
@@ -971,7 +982,7 @@ func (suite *DeployAPIGatewayTestSuite) TestUpdateFunctionWithIngressWhenHasAPIG
 
 		// create an api-gateway with that function as upstream
 		createAPIGatewayOptions := suite.CompileCreateAPIGatewayOptions(apiGatewayName, functionName)
-		err := suite.DeployAPIGateway(createAPIGatewayOptions, func(*extensionsv1beta1.Ingress) {
+		err := suite.DeployAPIGateway(createAPIGatewayOptions, func(*networkingv1.Ingress) {
 
 			// update the function to have ingresses
 			createFunctionOptions.FunctionConfig.Spec.Triggers = map[string]functionconfig.Trigger{
@@ -1014,7 +1025,7 @@ func (suite *DeployAPIGatewayTestSuite) TestDexAuthMode() {
 	suite.DeployFunction(createFunctionOptions, func(deployResult *platform.CreateFunctionResult) bool {
 		createAPIGatewayOptions := suite.CompileCreateAPIGatewayOptions(apiGatewayName, functionName)
 		createAPIGatewayOptions.APIGatewayConfig.Spec.AuthenticationMode = ingress.AuthenticationModeOauth2
-		err := suite.DeployAPIGateway(createAPIGatewayOptions, func(ingress *extensionsv1beta1.Ingress) {
+		err := suite.DeployAPIGateway(createAPIGatewayOptions, func(ingress *networkingv1.Ingress) {
 			suite.Require().NotContains(ingress.Annotations, "nginx.ingress.kubernetes.io/auth-signin")
 			suite.Require().Contains(ingress.Annotations["nginx.ingress.kubernetes.io/auth-url"], configOauth2ProxyURL)
 			suite.Require().Contains(ingress.Annotations["nginx.ingress.kubernetes.io/configuration-snippet"],
@@ -1031,7 +1042,7 @@ func (suite *DeployAPIGatewayTestSuite) TestDexAuthMode() {
 				RedirectUnauthorizedToSignIn: true,
 			},
 		}
-		err = suite.DeployAPIGateway(createAPIGatewayOptions, func(ingress *extensionsv1beta1.Ingress) {
+		err = suite.DeployAPIGateway(createAPIGatewayOptions, func(ingress *networkingv1.Ingress) {
 			suite.Assert().Contains(ingress.Annotations, "nginx.ingress.kubernetes.io/auth-signin")
 			suite.Assert().Contains(ingress.Annotations["nginx.ingress.kubernetes.io/auth-signin"], overrideOauth2ProxyURL)
 			suite.Assert().Contains(ingress.Annotations["nginx.ingress.kubernetes.io/auth-url"], overrideOauth2ProxyURL)
@@ -1049,7 +1060,7 @@ func (suite *DeployAPIGatewayTestSuite) TestUpdate() {
 	createFunctionOptions := suite.CompileCreateFunctionOptions(functionName)
 
 	// create project
-	err := suite.Platform.CreateProject(&platform.CreateProjectOptions{
+	err := suite.Platform.CreateProject(suite.Ctx, &platform.CreateProjectOptions{
 		ProjectConfig: &platform.ProjectConfig{
 			Meta: platform.ProjectMeta{
 				Name:      projectName,
@@ -1067,11 +1078,11 @@ func (suite *DeployAPIGatewayTestSuite) TestUpdate() {
 		createAPIGatewayOptions.APIGatewayConfig.Meta.Labels["nuclio.io/project-name"] = projectName
 
 		// create
-		err := suite.Platform.CreateAPIGateway(createAPIGatewayOptions)
+		err := suite.Platform.CreateAPIGateway(suite.Ctx, createAPIGatewayOptions)
 		suite.Require().NoError(err)
 
 		// delete leftovers
-		defer suite.Platform.DeleteAPIGateway(&platform.DeleteAPIGatewayOptions{ // nolint: errcheck
+		defer suite.Platform.DeleteAPIGateway(suite.Ctx, &platform.DeleteAPIGatewayOptions{ // nolint: errcheck
 			Meta: createAPIGatewayOptions.APIGatewayConfig.Meta,
 		})
 
@@ -1096,7 +1107,7 @@ func (suite *DeployAPIGatewayTestSuite) TestUpdate() {
 		}
 		createAPIGatewayOptions.APIGatewayConfig.Spec.Host = afterUpdateHostValue
 		createAPIGatewayOptions.APIGatewayConfig.Meta.Annotations = annotations
-		err = suite.Platform.UpdateAPIGateway(&platform.UpdateAPIGatewayOptions{
+		err = suite.Platform.UpdateAPIGateway(suite.Ctx, &platform.UpdateAPIGatewayOptions{
 			APIGatewayConfig: createAPIGatewayOptions.APIGatewayConfig,
 		})
 		suite.Require().NoError(err)
@@ -1138,12 +1149,12 @@ func (suite *ProjectTestSuite) TestCreate() {
 	}
 
 	// create project
-	err := suite.Platform.CreateProject(&platform.CreateProjectOptions{
+	err := suite.Platform.CreateProject(suite.Ctx, &platform.CreateProjectOptions{
 		ProjectConfig: &projectConfig,
 	})
 	suite.Require().NoError(err, "Failed to create project")
 	defer func() {
-		err = suite.Platform.DeleteProject(&platform.DeleteProjectOptions{
+		err = suite.Platform.DeleteProject(suite.Ctx, &platform.DeleteProjectOptions{
 			Meta:     projectConfig.Meta,
 			Strategy: platform.DeleteProjectStrategyRestricted,
 		})
@@ -1151,7 +1162,7 @@ func (suite *ProjectTestSuite) TestCreate() {
 	}()
 
 	// get created project
-	projects, err := suite.Platform.GetProjects(&platform.GetProjectsOptions{
+	projects, err := suite.Platform.GetProjects(suite.Ctx, &platform.GetProjectsOptions{
 		Meta: projectConfig.Meta,
 	})
 	suite.Require().NoError(err, "Failed to get projects")
@@ -1180,14 +1191,14 @@ func (suite *ProjectTestSuite) TestUpdate() {
 	}
 
 	// create project
-	err := suite.Platform.CreateProject(&platform.CreateProjectOptions{
+	err := suite.Platform.CreateProject(suite.Ctx, &platform.CreateProjectOptions{
 		ProjectConfig: &projectConfig,
 	})
 	suite.Require().NoError(err, "Failed to create project")
 
 	// delete leftover
 	defer func() {
-		err := suite.Platform.DeleteProject(&platform.DeleteProjectOptions{
+		err := suite.Platform.DeleteProject(suite.Ctx, &platform.DeleteProjectOptions{
 			Meta:     projectConfig.Meta,
 			Strategy: platform.DeleteProjectStrategyRestricted,
 		})
@@ -1203,7 +1214,7 @@ func (suite *ProjectTestSuite) TestUpdate() {
 	projectConfig.Meta.Labels["added-label"] = "added-label-value"
 
 	// update project
-	err = suite.Platform.UpdateProject(&platform.UpdateProjectOptions{
+	err = suite.Platform.UpdateProject(suite.Ctx, &platform.UpdateProjectOptions{
 		ProjectConfig: projectConfig,
 	})
 	suite.Require().NoError(err, "Failed to update project")
@@ -1236,20 +1247,20 @@ func (suite *ProjectTestSuite) TestDelete() {
 	}
 
 	// create project
-	err := suite.Platform.CreateProject(&platform.CreateProjectOptions{
+	err := suite.Platform.CreateProject(suite.Ctx, &platform.CreateProjectOptions{
 		ProjectConfig: &projectConfig,
 	})
 	suite.Require().NoError(err, "Failed to create project")
 
 	// delete project
-	err = suite.Platform.DeleteProject(&platform.DeleteProjectOptions{
+	err = suite.Platform.DeleteProject(suite.Ctx, &platform.DeleteProjectOptions{
 		Meta:     projectConfig.Meta,
 		Strategy: platform.DeleteProjectStrategyRestricted,
 	})
 	suite.Require().NoError(err, "Failed to delete project")
 
 	// ensure project does not exist
-	projects, err := suite.Platform.GetProjects(&platform.GetProjectsOptions{
+	projects, err := suite.Platform.GetProjects(suite.Ctx, &platform.GetProjectsOptions{
 		Meta: projectConfig.Meta,
 	})
 	suite.Require().NoError(err, "Failed to get projects")
@@ -1265,7 +1276,7 @@ func (suite *ProjectTestSuite) TestDeleteCascading() {
 			Namespace: suite.Namespace,
 		},
 	}
-	err := suite.Platform.CreateProject(&platform.CreateProjectOptions{
+	err := suite.Platform.CreateProject(suite.Ctx, &platform.CreateProjectOptions{
 		ProjectConfig: &projectToDeleteConfig,
 	})
 	suite.Require().NoError(err, "Failed to create project")
@@ -1277,10 +1288,10 @@ func (suite *ProjectTestSuite) TestDeleteCascading() {
 	functionToDeleteB := suite.CreateImportedFunction("func-to-delete-b", projectToDeleteConfig.Meta.Name)
 
 	// delete leftovers
-	defer suite.Platform.DeleteFunction(&platform.DeleteFunctionOptions{ // nolint: errcheck
+	defer suite.Platform.DeleteFunction(suite.Ctx, &platform.DeleteFunctionOptions{ // nolint: errcheck
 		FunctionConfig: *functionToDeleteA,
 	})
-	defer suite.Platform.DeleteFunction(&platform.DeleteFunctionOptions{ // nolint: errcheck
+	defer suite.Platform.DeleteFunction(suite.Ctx, &platform.DeleteFunctionOptions{ // nolint: errcheck
 		FunctionConfig: *functionToDeleteB,
 	})
 
@@ -1288,9 +1299,9 @@ func (suite *ProjectTestSuite) TestDeleteCascading() {
 	createAPIGatewayOptions := suite.CompileCreateAPIGatewayOptions("apigw-to-delete",
 		functionToDeleteA.Meta.Name)
 	createAPIGatewayOptions.APIGatewayConfig.Meta.Labels["nuclio.io/project-name"] = projectToDeleteConfig.Meta.Name
-	err = suite.Platform.CreateAPIGateway(createAPIGatewayOptions)
+	err = suite.Platform.CreateAPIGateway(suite.Ctx, createAPIGatewayOptions)
 	suite.Require().NoError(err)
-	defer suite.Platform.DeleteAPIGateway(&platform.DeleteAPIGatewayOptions{ // nolint: errcheck
+	defer suite.Platform.DeleteAPIGateway(suite.Ctx, &platform.DeleteAPIGatewayOptions{ // nolint: errcheck
 		Meta: createAPIGatewayOptions.APIGatewayConfig.Meta,
 	})
 
@@ -1301,9 +1312,9 @@ func (suite *ProjectTestSuite) TestDeleteCascading() {
 
 	// create 2 function events for function B (deleted along with `projectToDeleteConfig`)
 	functionEventA := suite.CompileCreateFunctionEventOptions("function-event-a", functionToDeleteB.Meta.Name)
-	err = suite.Platform.CreateFunctionEvent(functionEventA)
+	err = suite.Platform.CreateFunctionEvent(suite.Ctx, functionEventA)
 	suite.Require().NoError(err)
-	defer suite.Platform.DeleteFunctionEvent(&platform.DeleteFunctionEventOptions{ // nolint: errcheck
+	defer suite.Platform.DeleteFunctionEvent(suite.Ctx, &platform.DeleteFunctionEventOptions{ // nolint: errcheck
 		Meta: platform.FunctionEventMeta{
 			Name:      functionEventA.FunctionEventConfig.Meta.Name,
 			Namespace: suite.Namespace,
@@ -1311,9 +1322,9 @@ func (suite *ProjectTestSuite) TestDeleteCascading() {
 	})
 
 	functionEventB := suite.CompileCreateFunctionEventOptions("function-event-b", functionToDeleteB.Meta.Name)
-	err = suite.Platform.CreateFunctionEvent(functionEventB)
+	err = suite.Platform.CreateFunctionEvent(suite.Ctx, functionEventB)
 	suite.Require().NoError(err)
-	defer suite.Platform.DeleteFunctionEvent(&platform.DeleteFunctionEventOptions{ // nolint: errcheck
+	defer suite.Platform.DeleteFunctionEvent(suite.Ctx, &platform.DeleteFunctionEventOptions{ // nolint: errcheck
 		Meta: platform.FunctionEventMeta{
 			Name:      functionEventB.FunctionEventConfig.Meta.Name,
 			Namespace: suite.Namespace,
@@ -1321,7 +1332,7 @@ func (suite *ProjectTestSuite) TestDeleteCascading() {
 	})
 
 	// try restrict - expect it to fail (project has sub resources)
-	err = suite.Platform.DeleteProject(&platform.DeleteProjectOptions{
+	err = suite.Platform.DeleteProject(suite.Ctx, &platform.DeleteProjectOptions{
 		Meta: platform.ProjectMeta{
 			Name:      projectToDeleteConfig.Meta.Name,
 			Namespace: suite.Namespace,
@@ -1331,7 +1342,7 @@ func (suite *ProjectTestSuite) TestDeleteCascading() {
 	suite.Require().Error(err)
 
 	// try cascading - expect it succeed
-	err = suite.Platform.DeleteProject(&platform.DeleteProjectOptions{
+	err = suite.Platform.DeleteProject(suite.Ctx, &platform.DeleteProjectOptions{
 		Meta: platform.ProjectMeta{
 			Name:      projectToDeleteConfig.Meta.Name,
 			Namespace: suite.Namespace,
@@ -1343,7 +1354,7 @@ func (suite *ProjectTestSuite) TestDeleteCascading() {
 	suite.Require().NoError(err)
 
 	// assertion - project should be deleted
-	projects, err := suite.Platform.GetProjects(&platform.GetProjectsOptions{
+	projects, err := suite.Platform.GetProjects(suite.Ctx, &platform.GetProjectsOptions{
 		Meta: platform.ProjectMeta{
 			Name:      projectToDeleteConfig.Meta.Name,
 			Namespace: suite.Namespace,
@@ -1355,7 +1366,7 @@ func (suite *ProjectTestSuite) TestDeleteCascading() {
 	suite.Logger.InfoWith("Ensuring resources were removed (deletion is being executed in background")
 
 	// ensure api gateway deleted
-	apiGateways, err := suite.Platform.GetAPIGateways(&platform.GetAPIGatewaysOptions{
+	apiGateways, err := suite.Platform.GetAPIGateways(suite.Ctx, &platform.GetAPIGatewaysOptions{
 		Name:      createAPIGatewayOptions.APIGatewayConfig.Meta.Name,
 		Namespace: suite.Namespace,
 	})
@@ -1367,7 +1378,7 @@ func (suite *ProjectTestSuite) TestDeleteCascading() {
 		functionToDeleteA.Meta.Name,
 		functionToDeleteB.Meta.Name,
 	} {
-		functions, err := suite.Platform.GetFunctions(&platform.GetFunctionsOptions{
+		functions, err := suite.Platform.GetFunctions(suite.Ctx, &platform.GetFunctionsOptions{
 			Name:      functionName,
 			Namespace: suite.Namespace,
 		})
@@ -1380,7 +1391,7 @@ func (suite *ProjectTestSuite) TestDeleteCascading() {
 		functionEventA.FunctionEventConfig.Meta.Name,
 		functionEventB.FunctionEventConfig.Meta.Name,
 	} {
-		functionEvents, err := suite.Platform.GetFunctionEvents(&platform.GetFunctionEventsOptions{
+		functionEvents, err := suite.Platform.GetFunctionEvents(suite.Ctx, &platform.GetFunctionEventsOptions{
 			Meta: platform.FunctionEventMeta{
 				Name:      functionEventName,
 				Namespace: suite.Namespace,

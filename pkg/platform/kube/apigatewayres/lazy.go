@@ -17,6 +17,7 @@ import (
 
 	"github.com/nuclio/errors"
 	"github.com/nuclio/logger"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
@@ -58,7 +59,7 @@ func (lc *lazyClient) Get(ctx context.Context, namespace string, name string) (R
 func (lc *lazyClient) CreateOrUpdate(ctx context.Context, apiGateway *nuclioio.NuclioAPIGateway) (Resources, error) {
 	apiGateway.Status.Name = apiGateway.Spec.Name
 
-	if err := lc.validateSpec(apiGateway); err != nil {
+	if err := lc.validateSpec(ctx, apiGateway); err != nil {
 		return nil, errors.Wrap(err, "Api gateway spec validation failed")
 	}
 
@@ -107,7 +108,7 @@ func (lc *lazyClient) CreateOrUpdate(ctx context.Context, apiGateway *nuclioio.N
 	// must be done synchronously, first primary and then canary
 	// otherwise, when there is only canary ingress, the endpoint will not work (nginx behavior)
 	for _, ingressResources := range ingressesToCreate {
-		if _, _, err := lc.ingressManager.CreateOrUpdateResources(ingressResources); err != nil {
+		if _, _, err := lc.ingressManager.CreateOrUpdateResources(ctx, ingressResources); err != nil {
 			lc.logger.WarnWithCtx(ctx, "Failed to create/update api gateway ingress resources",
 				"err", errors.Cause(err),
 				"ingressName", ingressResources.Ingress.Name)
@@ -121,7 +122,7 @@ func (lc *lazyClient) CreateOrUpdate(ctx context.Context, apiGateway *nuclioio.N
 }
 
 func (lc *lazyClient) WaitAvailable(ctx context.Context, namespace string, name string) {
-	lc.logger.Debug("Sleeping for 4 seconds so nginx controller will stabilize")
+	lc.logger.DebugWithCtx(ctx, "Sleeping for 4 seconds so nginx controller will stabilize")
 
 	// sleep 4 seconds as a safety, so nginx will finish updating the ingresses properly (it takes time)
 	time.Sleep(4 * time.Second)
@@ -130,29 +131,34 @@ func (lc *lazyClient) WaitAvailable(ctx context.Context, namespace string, name 
 func (lc *lazyClient) Delete(ctx context.Context, namespace string, name string) {
 	lc.logger.DebugWithCtx(ctx, "Deleting api gateway base ingress", "name", name)
 
-	err := lc.ingressManager.DeleteByName(kube.IngressNameFromAPIGatewayName(name, false), namespace, true)
-	if err != nil {
+	if err := lc.ingressManager.DeleteByName(ctx,
+		kube.IngressNameFromAPIGatewayName(name, false),
+		namespace,
+		true); err != nil {
 		lc.logger.WarnWithCtx(ctx, "Failed to delete base ingress. Continuing with deletion",
-			"err", errors.Cause(err))
+			"err", errors.Cause(err).Error())
 	}
 
 	lc.logger.DebugWithCtx(ctx, "Deleting api gateway canary ingress", "name", name)
-
-	err = lc.ingressManager.DeleteByName(kube.IngressNameFromAPIGatewayName(name, true), namespace, true)
-	if err != nil {
+	if err := lc.ingressManager.DeleteByName(ctx,
+		kube.IngressNameFromAPIGatewayName(name, true),
+		namespace,
+		true); err != nil {
 		lc.logger.WarnWithCtx(ctx, "Failed to delete canary ingress. Continuing with deletion",
-			"err", errors.Cause(err))
+			"err", errors.Cause(err).Error())
 	}
 }
 
 func (lc *lazyClient) tryRemovePreviousCanaryIngress(ctx context.Context, apiGateway *nuclioio.NuclioAPIGateway) {
-	lc.logger.DebugWithCtx(ctx, "Trying to remove previous canary ingress",
+	lc.logger.DebugWithCtx(ctx,
+		"Trying to remove previous canary ingress",
 		"apiGatewayName", apiGateway.Name)
 
 	// remove old canary ingress if it exists
 	// this works thanks to an assumption that ingress names == api gateway name
 	previousCanaryIngressName := kube.IngressNameFromAPIGatewayName(apiGateway.Name, true)
-	if err := lc.ingressManager.DeleteByName(previousCanaryIngressName,
+	if err := lc.ingressManager.DeleteByName(ctx,
+		previousCanaryIngressName,
 		apiGateway.Namespace,
 		true); err != nil {
 		lc.logger.WarnWithCtx(ctx,
@@ -162,7 +168,7 @@ func (lc *lazyClient) tryRemovePreviousCanaryIngress(ctx context.Context, apiGat
 	}
 }
 
-func (lc *lazyClient) validateSpec(apiGateway *nuclioio.NuclioAPIGateway) error {
+func (lc *lazyClient) validateSpec(ctx context.Context, apiGateway *nuclioio.NuclioAPIGateway) error {
 	upstreams := apiGateway.Spec.Upstreams
 
 	if err := kube.ValidateAPIGatewaySpec(&apiGateway.Spec); err != nil {
@@ -172,7 +178,7 @@ func (lc *lazyClient) validateSpec(apiGateway *nuclioio.NuclioAPIGateway) error 
 	// make sure each upstream is unique - meaning, there's no other api gateway with an upstream with the
 	// same service (currently only nuclio function) name
 	// (this is done because creating multiple ingresses with the same service name breaks nginx ingress controller)
-	existingUpstreamFunctionNames, err := lc.getAllExistingUpstreamFunctionNames(apiGateway.Namespace, apiGateway.Name)
+	existingUpstreamFunctionNames, err := lc.getAllExistingUpstreamFunctionNames(ctx, apiGateway.Namespace, apiGateway.Name)
 	if err != nil {
 		return errors.Wrap(err, "Failed while getting all existing upstreams")
 	}
@@ -186,12 +192,12 @@ func (lc *lazyClient) validateSpec(apiGateway *nuclioio.NuclioAPIGateway) error 
 	return nil
 }
 
-func (lc *lazyClient) getAllExistingUpstreamFunctionNames(namespace, apiGatewayNameToExclude string) ([]string, error) {
+func (lc *lazyClient) getAllExistingUpstreamFunctionNames(ctx context.Context, namespace, apiGatewayNameToExclude string) ([]string, error) {
 	var existingUpstreamNames []string
 
 	existingAPIGateways, err := lc.nuclioClientSet.NuclioV1beta1().
 		NuclioAPIGateways(namespace).
-		List(metav1.ListOptions{})
+		List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to list existing api gateways")
 	}
@@ -269,6 +275,12 @@ func (lc *lazyClient) generateNginxIngress(ctx context.Context,
 	commonIngressSpec.Annotations = lc.resolveCommonAnnotations(canaryDeployment, upstream.Percentage)
 	for annotationKey, annotationValue := range upstream.ExtraAnnotations {
 		commonIngressSpec.Annotations[annotationKey] = annotationValue
+	}
+
+	// enrich ingress pathType
+	if commonIngressSpec.PathType == nil {
+		defaultPathType := networkingv1.PathTypeImplementationSpecific
+		commonIngressSpec.PathType = &defaultPathType
 	}
 
 	return lc.ingressManager.GenerateResources(ctx, commonIngressSpec)

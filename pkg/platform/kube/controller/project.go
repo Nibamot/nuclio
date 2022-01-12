@@ -39,7 +39,8 @@ type projectOperator struct {
 	operator   operator.Operator
 }
 
-func newProjectOperator(parentLogger logger.Logger,
+func newProjectOperator(ctx context.Context,
+	parentLogger logger.Logger,
 	controller *Controller,
 	resyncInterval *time.Duration,
 	numWorkers int) (*projectOperator, error) {
@@ -53,9 +54,10 @@ func newProjectOperator(parentLogger logger.Logger,
 	}
 
 	// create a project operator
-	newProjectOperator.operator, err = operator.NewMultiWorker(loggerInstance,
+	newProjectOperator.operator, err = operator.NewMultiWorker(ctx,
+		loggerInstance,
 		numWorkers,
-		newProjectOperator.getListWatcher(controller.namespace),
+		newProjectOperator.getListWatcher(ctx, controller.namespace),
 		&nuclioio.NuclioProject{},
 		resyncInterval,
 		newProjectOperator)
@@ -64,7 +66,7 @@ func newProjectOperator(parentLogger logger.Logger,
 		return nil, errors.Wrap(err, "Failed to create project operator")
 	}
 
-	parentLogger.DebugWith("Created project operator",
+	parentLogger.DebugWithCtx(ctx, "Created project operator",
 		"numWorkers", numWorkers,
 		"resyncInterval", resyncInterval)
 
@@ -78,13 +80,13 @@ func (po *projectOperator) CreateOrUpdate(ctx context.Context, object runtime.Ob
 		return errors.New("Received unexpected object, expected project")
 	}
 
-	po.logger.DebugWith("Created/updated", "projectName", project.Name)
+	po.logger.DebugWithCtx(ctx, "Created/updated", "projectName", project.Name)
 	return nil
 }
 
 // Delete handles delete of an object
 func (po *projectOperator) Delete(ctx context.Context, namespace string, name string) error {
-	po.logger.InfoWith("Deleting project resources", "namespace", namespace, "projectName", name)
+	po.logger.InfoWithCtx(ctx, "Deleting project resources", "namespace", namespace, "projectName", name)
 
 	projectNameLabelSelector := fmt.Sprintf("%s=%s", common.NuclioResourceLabelKeyProjectName, name)
 
@@ -92,11 +94,11 @@ func (po *projectOperator) Delete(ctx context.Context, namespace string, name st
 	if err := po.controller.nuclioClientSet.
 		NuclioV1beta1().
 		NuclioAPIGateways(namespace).
-		DeleteCollection(&metav1.DeleteOptions{},
+		DeleteCollection(ctx, metav1.DeleteOptions{},
 			metav1.ListOptions{
 				LabelSelector: projectNameLabelSelector,
 			}); err != nil {
-		po.logger.WarnWith("Failed to delete project api gateway",
+		po.logger.WarnWithCtx(ctx, "Failed to delete project api gateway",
 			"namespace", namespace,
 			"projectName", name,
 			"err", err)
@@ -108,12 +110,12 @@ func (po *projectOperator) Delete(ctx context.Context, namespace string, name st
 	if err := po.controller.nuclioClientSet.
 		NuclioV1beta1().
 		NuclioFunctions(namespace).
-		DeleteCollection(&metav1.DeleteOptions{},
+		DeleteCollection(ctx, metav1.DeleteOptions{},
 			metav1.ListOptions{
 				LabelSelector: projectNameLabelSelector,
 			}); err != nil {
 
-		po.logger.WarnWith("Failed to delete project functions",
+		po.logger.WarnWithCtx(ctx, "Failed to delete project functions",
 			"namespace", namespace,
 			"projectName", name,
 			"err", err)
@@ -121,25 +123,25 @@ func (po *projectOperator) Delete(ctx context.Context, namespace string, name st
 	}
 
 	// done
-	po.logger.DebugWith("Successfully deleted project resources",
+	po.logger.DebugWithCtx(ctx, "Successfully deleted project resources",
 		"namespace", namespace,
 		"projectName", name)
 	return nil
 }
 
-func (po *projectOperator) getListWatcher(namespace string) cache.ListerWatcher {
+func (po *projectOperator) getListWatcher(ctx context.Context, namespace string) cache.ListerWatcher {
 	return &cache.ListWatch{
 		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
-			return po.controller.nuclioClientSet.NuclioV1beta1().NuclioProjects(namespace).List(options)
+			return po.controller.nuclioClientSet.NuclioV1beta1().NuclioProjects(namespace).List(ctx, options)
 		},
 		WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
-			return po.controller.nuclioClientSet.NuclioV1beta1().NuclioProjects(namespace).Watch(options)
+			return po.controller.nuclioClientSet.NuclioV1beta1().NuclioProjects(namespace).Watch(ctx, options)
 		},
 	}
 }
 
-func (po *projectOperator) start() error {
-	go po.operator.Start() // nolint: errcheck
+func (po *projectOperator) start(ctx context.Context) error {
+	go po.operator.Start(ctx) // nolint: errcheck
 
 	return nil
 }

@@ -37,7 +37,8 @@ type functionEventOperator struct {
 	operator   operator.Operator
 }
 
-func newFunctionEventOperator(parentLogger logger.Logger,
+func newFunctionEventOperator(ctx context.Context,
+	parentLogger logger.Logger,
 	controller *Controller,
 	resyncInterval *time.Duration,
 	numWorkers int) (*functionEventOperator, error) {
@@ -51,9 +52,10 @@ func newFunctionEventOperator(parentLogger logger.Logger,
 	}
 
 	// create a function event operator
-	newFunctionEventOperator.operator, err = operator.NewMultiWorker(loggerInstance,
+	newFunctionEventOperator.operator, err = operator.NewMultiWorker(ctx,
+		loggerInstance,
 		numWorkers,
-		newFunctionEventOperator.getListWatcher(controller.namespace),
+		newFunctionEventOperator.getListWatcher(ctx, controller.namespace),
 		&nuclioio.NuclioFunctionEvent{},
 		resyncInterval,
 		newFunctionEventOperator)
@@ -62,7 +64,7 @@ func newFunctionEventOperator(parentLogger logger.Logger,
 		return nil, errors.Wrap(err, "Failed to create function event operator")
 	}
 
-	parentLogger.DebugWith("Created function event operator",
+	parentLogger.DebugWithCtx(ctx, "Created function event operator",
 		"numWorkers", numWorkers,
 		"resyncInterval", resyncInterval)
 
@@ -76,30 +78,30 @@ func (feo *functionEventOperator) CreateOrUpdate(ctx context.Context, object run
 		return errors.New("Received unexpected object, expected function event")
 	}
 
-	feo.logger.DebugWith("Created/updated", "functionEventName", functionEvent.Name)
+	feo.logger.DebugWithCtx(ctx, "Created/updated", "functionEventName", functionEvent.Name)
 	return nil
 }
 
 // Delete handles delete of an object
 func (feo *functionEventOperator) Delete(ctx context.Context, namespace string, name string) error {
-	feo.logger.DebugWith("Deleted", "namespace", namespace, "name", name)
+	feo.logger.DebugWithCtx(ctx, "Deleted", "namespace", namespace, "name", name)
 
 	return nil
 }
 
-func (feo *functionEventOperator) getListWatcher(namespace string) cache.ListerWatcher {
+func (feo *functionEventOperator) getListWatcher(ctx context.Context, namespace string) cache.ListerWatcher {
 	return &cache.ListWatch{
 		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
-			return feo.controller.nuclioClientSet.NuclioV1beta1().NuclioFunctionEvents(namespace).List(options)
+			return feo.controller.nuclioClientSet.NuclioV1beta1().NuclioFunctionEvents(namespace).List(ctx, options)
 		},
 		WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
-			return feo.controller.nuclioClientSet.NuclioV1beta1().NuclioFunctionEvents(namespace).Watch(options)
+			return feo.controller.nuclioClientSet.NuclioV1beta1().NuclioFunctionEvents(namespace).Watch(ctx, options)
 		},
 	}
 }
 
-func (feo *functionEventOperator) start() error {
-	go feo.operator.Start() // nolint: errcheck
+func (feo *functionEventOperator) start(ctx context.Context) error {
+	go feo.operator.Start(ctx) // nolint: errcheck
 
 	return nil
 }

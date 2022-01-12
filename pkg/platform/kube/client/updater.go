@@ -17,6 +17,7 @@ limitations under the License.
 package client
 
 import (
+	"context"
 	"strconv"
 	"time"
 
@@ -45,13 +46,13 @@ func NewUpdater(parentLogger logger.Logger, consumer *Consumer, platform platfor
 	return newUpdater, nil
 }
 
-func (u *Updater) Update(updateFunctionOptions *platform.UpdateFunctionOptions) error {
-	u.logger.InfoWith("Updating function", "name", updateFunctionOptions.FunctionMeta.Name)
+func (u *Updater) Update(ctx context.Context, updateFunctionOptions *platform.UpdateFunctionOptions) error {
+	u.logger.InfoWithCtx(ctx, "Updating function", "name", updateFunctionOptions.FunctionMeta.Name)
 
 	// get specific function CR
 	function, err := u.consumer.NuclioClientSet.NuclioV1beta1().
 		NuclioFunctions(updateFunctionOptions.FunctionMeta.Namespace).
-		Get(updateFunctionOptions.FunctionMeta.Name, metav1.GetOptions{})
+		Get(ctx, updateFunctionOptions.FunctionMeta.Name, metav1.GetOptions{})
 	if err != nil {
 		return errors.Wrap(err, "Failed to get function")
 	}
@@ -96,19 +97,19 @@ func (u *Updater) Update(updateFunctionOptions *platform.UpdateFunctionOptions) 
 	updatedFunction, err := nuclioClientSet.
 		NuclioV1beta1().
 		NuclioFunctions(updateFunctionOptions.FunctionMeta.Namespace).
-		Update(function)
+		Update(ctx, function, metav1.UpdateOptions{})
 	if err != nil {
 		return errors.Wrap(err, "Failed to update function CR")
 	}
 
 	// wait for the function to be ready
-	if _, err := waitForFunctionReadiness(u.logger,
+	if _, err := waitForFunctionReadiness(ctx,
 		u.consumer,
 		updatedFunction.Namespace,
 		updatedFunction.Name); err != nil {
 		return errors.Wrap(err, "Failed to wait for function readiness")
 	}
 
-	u.logger.InfoWith("Function updated", "functionName", updatedFunction.Name)
+	u.logger.InfoWithCtx(ctx, "Function updated", "functionName", updatedFunction.Name)
 	return nil
 }

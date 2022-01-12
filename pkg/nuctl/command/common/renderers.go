@@ -29,14 +29,14 @@ func RenderFunctions(logger logger.Logger,
 	writer io.Writer,
 	renderCallback func(functions []platform.Function, renderer func(interface{}) error) error) error {
 
-	errGroup, _ := errgroup.WithContext(context.TODO(), logger)
+	errGroup, _ := errgroup.WithContext(context.Background(), logger)
 	var renderNodePort bool
 
 	// iterate over each function and make sure it's initialized
 	for _, function := range functions {
 		function := function
 		errGroup.Go("initialize function", func() error {
-			if err := function.Initialize(nil); err != nil {
+			if err := function.Initialize(context.Background(), nil); err != nil {
 				logger.DebugWith("Failed to initialize function", "err", err.Error())
 			}
 			if function.GetStatus().HTTPPort > 0 {

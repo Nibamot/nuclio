@@ -1,4 +1,4 @@
-// +build test_unit
+//go:build test_unit
 
 /*
 Copyright 2017 The Nuclio Authors.
@@ -19,12 +19,15 @@ limitations under the License.
 package kube
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"testing"
 
 	"github.com/nuclio/nuclio/pkg/common"
 	"github.com/nuclio/nuclio/pkg/containerimagebuilderpusher"
+	"github.com/nuclio/nuclio/pkg/dashboard/auth"
+	"github.com/nuclio/nuclio/pkg/dashboard/auth/iguazio"
 	"github.com/nuclio/nuclio/pkg/functionconfig"
 	"github.com/nuclio/nuclio/pkg/opa"
 	"github.com/nuclio/nuclio/pkg/platform"
@@ -43,7 +46,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 	"k8s.io/api/core/v1"
-	extensionsv1beta1 "k8s.io/api/extensions/v1beta1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -67,6 +70,7 @@ type KubePlatformTestSuite struct {
 	PlatformKubeConfig               *platformconfig.PlatformKubeConfig
 	mockedOpaClient                  *opa.MockClient
 	opaOverrideHeaderValue           string
+	ctx                              context.Context
 }
 
 func (suite *KubePlatformTestSuite) SetupSuite() {
@@ -77,6 +81,8 @@ func (suite *KubePlatformTestSuite) SetupSuite() {
 	suite.Namespace = "default-namespace"
 	suite.Logger, err = nucliozap.NewNuclioZapTest("test")
 	suite.Require().NoError(err, "Logger should create successfully")
+
+	suite.ctx = context.Background()
 
 	suite.PlatformKubeConfig = &platformconfig.PlatformKubeConfig{
 		DefaultServiceType: v1.ServiceTypeClusterIP,
@@ -181,7 +187,7 @@ func (suite *FunctionKubePlatformTestSuite) TestFunctionNodeSelectorEnrichment()
 		suite.Run(testCase.name, func() {
 			functionConfig := functionconfig.NewConfig()
 			functionConfig.Spec.NodeSelector = testCase.nodeSelector
-			err := suite.Platform.EnrichFunctionConfig(functionConfig)
+			err := suite.Platform.EnrichFunctionConfig(suite.ctx, functionConfig)
 			suite.Require().NoError(err)
 			suite.Require().Equal(testCase.expectedNodeSelector, functionConfig.Spec.NodeSelector)
 
@@ -229,7 +235,7 @@ func (suite *FunctionKubePlatformTestSuite) TestValidateServiceType() {
 	} {
 		suite.Run(testCase.name, func() {
 			suite.mockedPlatform.
-				On("GetProjects", &platform.GetProjectsOptions{
+				On("GetProjects", suite.ctx, &platform.GetProjectsOptions{
 					Meta: platform.ProjectMeta{
 						Name:      platform.DefaultProjectName,
 						Namespace: "default",
@@ -255,7 +261,7 @@ func (suite *FunctionKubePlatformTestSuite) TestValidateServiceType() {
 			}
 			suite.Logger.DebugWith("Checking function ", "functionName", functionName)
 
-			err := suite.Platform.ValidateFunctionConfig(&createFunctionOptions.FunctionConfig)
+			err := suite.Platform.ValidateFunctionConfig(suite.ctx, &createFunctionOptions.FunctionConfig)
 			if testCase.shouldFailValidation {
 				suite.Require().Error(err, "Validation passed unexpectedly")
 			} else {
@@ -269,7 +275,7 @@ func (suite *FunctionKubePlatformTestSuite) TestFunctionTriggersEnrichmentAndVal
 
 	// return empty api gateways list on enrichFunctionsWithAPIGateways (not tested here)
 	suite.nuclioAPIGatewayInterfaceMock.
-		On("List", metav1.ListOptions{}).
+		On("List", suite.ctx, metav1.ListOptions{}).
 		Return(&v1beta1.NuclioAPIGatewayList{}, nil)
 
 	for idx, testCase := range []struct {
@@ -298,18 +304,18 @@ func (suite *FunctionKubePlatformTestSuite) TestFunctionTriggersEnrichmentAndVal
 		{
 			name: "PathIsAvailable",
 			setUpFunction: func() error {
-				suite.kubeClientSet = *fake.NewSimpleClientset(&extensionsv1beta1.Ingress{
+				suite.kubeClientSet = *fake.NewSimpleClientset(&networkingv1.Ingress{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "some-name",
 						Namespace: suite.Namespace,
 					},
-					Spec: extensionsv1beta1.IngressSpec{
-						Rules: []extensionsv1beta1.IngressRule{
+					Spec: networkingv1.IngressSpec{
+						Rules: []networkingv1.IngressRule{
 							{
 								Host: "host-and-path-already-in-use.com",
-								IngressRuleValue: extensionsv1beta1.IngressRuleValue{
-									HTTP: &extensionsv1beta1.HTTPIngressRuleValue{
-										Paths: []extensionsv1beta1.HTTPIngressPath{
+								IngressRuleValue: networkingv1.IngressRuleValue{
+									HTTP: &networkingv1.HTTPIngressRuleValue{
+										Paths: []networkingv1.HTTPIngressPath{
 											{
 												Path: "used-path/",
 											},
@@ -343,18 +349,18 @@ func (suite *FunctionKubePlatformTestSuite) TestFunctionTriggersEnrichmentAndVal
 		{
 			name: "FailPathInUse",
 			setUpFunction: func() error {
-				suite.kubeClientSet = *fake.NewSimpleClientset(&extensionsv1beta1.Ingress{
+				suite.kubeClientSet = *fake.NewSimpleClientset(&networkingv1.Ingress{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "some-name",
 						Namespace: suite.Namespace,
 					},
-					Spec: extensionsv1beta1.IngressSpec{
-						Rules: []extensionsv1beta1.IngressRule{
+					Spec: networkingv1.IngressSpec{
+						Rules: []networkingv1.IngressRule{
 							{
 								Host: "host-and-path-already-in-use.com",
-								IngressRuleValue: extensionsv1beta1.IngressRuleValue{
-									HTTP: &extensionsv1beta1.HTTPIngressRuleValue{
-										Paths: []extensionsv1beta1.HTTPIngressPath{
+								IngressRuleValue: networkingv1.IngressRuleValue{
+									HTTP: &networkingv1.HTTPIngressRuleValue{
+										Paths: []networkingv1.HTTPIngressPath{
 											{
 												Path: "used-path/",
 											},
@@ -396,7 +402,7 @@ func (suite *FunctionKubePlatformTestSuite) TestFunctionTriggersEnrichmentAndVal
 			}
 
 			// mock get projects
-			suite.mockedPlatform.On("GetProjects", &platform.GetProjectsOptions{
+			suite.mockedPlatform.On("GetProjects", suite.ctx, &platform.GetProjectsOptions{
 				Meta: platform.ProjectMeta{
 					Name:      platform.DefaultProjectName,
 					Namespace: suite.Namespace,
@@ -422,7 +428,7 @@ func (suite *FunctionKubePlatformTestSuite) TestFunctionTriggersEnrichmentAndVal
 			suite.Logger.DebugWith("Enriching and validating function", "functionName", functionName)
 
 			// run enrichment
-			err := suite.Platform.EnrichFunctionConfig(&createFunctionOptions.FunctionConfig)
+			err := suite.Platform.EnrichFunctionConfig(suite.ctx, &createFunctionOptions.FunctionConfig)
 			suite.Require().NoError(err, "Failed to enrich function")
 
 			if testCase.expectedEnrichedTriggers != nil {
@@ -431,7 +437,7 @@ func (suite *FunctionKubePlatformTestSuite) TestFunctionTriggersEnrichmentAndVal
 			}
 
 			// run validation
-			err = suite.Platform.ValidateFunctionConfig(&createFunctionOptions.FunctionConfig)
+			err = suite.Platform.ValidateFunctionConfig(suite.ctx, &createFunctionOptions.FunctionConfig)
 			if testCase.validationError != "" {
 				suite.Require().Error(err, "Validation passed unexpectedly")
 				suite.Require().Equal(testCase.validationError, errors.RootCause(err).Error())
@@ -511,23 +517,26 @@ func (suite *FunctionKubePlatformTestSuite) TestGetFunctionInstanceAndConfig() {
 			}
 
 			suite.nuclioFunctionInterfaceMock.
-				On("Get", testCase.functionName, metav1.GetOptions{}).
+				On("Get", suite.ctx, testCase.functionName, metav1.GetOptions{}).
 				Return(getFunctionResponse, getFunctionResponseErr).
 				Once()
 			defer suite.nuclioAPIGatewayInterfaceMock.AssertExpectations(suite.T())
 
 			if testCase.functionExists {
 				suite.nuclioAPIGatewayInterfaceMock.
-					On("List", metav1.ListOptions{}).
+					On("List", suite.ctx, metav1.ListOptions{}).
 					Return(&listAPIGatewayResponse, nil).
 					Once()
 				defer suite.nuclioAPIGatewayInterfaceMock.AssertExpectations(suite.T())
 			}
 
 			functionInstance, functionConfigAndStatus, err := suite.Platform.
-				getFunctionInstanceAndConfig(suite.Namespace,
-					testCase.functionName,
-					true)
+				getFunctionInstanceAndConfig(suite.ctx,
+					&platform.GetFunctionsOptions{
+						Name:                  testCase.functionName,
+						Namespace:             suite.Namespace,
+						EnrichWithAPIGateways: true,
+					})
 
 			if testCase.expectValidationFailure {
 				suite.Require().Error(err)
@@ -608,7 +617,7 @@ func (suite *FunctionKubePlatformTestSuite) TestGetFunctionsPermissions() {
 			}
 
 			suite.nuclioFunctionInterfaceMock.
-				On("Get", functionName, metav1.GetOptions{}).
+				On("Get", suite.ctx, functionName, metav1.GetOptions{}).
 				Return(getFunctionResponse, nil).
 				Once()
 			defer suite.nuclioFunctionInterfaceMock.AssertExpectations(suite.T())
@@ -629,7 +638,7 @@ func (suite *FunctionKubePlatformTestSuite) TestGetFunctionsPermissions() {
 					Once()
 				defer suite.mockedOpaClient.AssertExpectations(suite.T())
 			}
-			functions, err := suite.Platform.GetFunctions(&platform.GetFunctionsOptions{
+			functions, err := suite.Platform.GetFunctions(suite.ctx, &platform.GetFunctionsOptions{
 				Name:      functionName,
 				Namespace: suite.Namespace,
 				PermissionOptions: opa.PermissionOptions{
@@ -690,7 +699,7 @@ func (suite *FunctionKubePlatformTestSuite) TestUpdateFunctionPermissions() {
 			}
 
 			suite.nuclioFunctionInterfaceMock.
-				On("Get", functionName, metav1.GetOptions{}).
+				On("Get", suite.ctx, functionName, metav1.GetOptions{}).
 				Return(getFunctionResponse, nil).
 				Once()
 			defer suite.nuclioFunctionInterfaceMock.AssertExpectations(suite.T())
@@ -719,18 +728,21 @@ func (suite *FunctionKubePlatformTestSuite) TestUpdateFunctionPermissions() {
 				}
 
 				suite.nuclioFunctionInterfaceMock.
-					On("Get", functionName, metav1.GetOptions{}).
+					On("Get", suite.ctx, functionName, metav1.GetOptions{}).
 					Return(getFunctionResponse, nil).
 					Once()
 
 				suite.nuclioFunctionInterfaceMock.
-					On("Update", mock.MatchedBy(verifyUpdateFunction)).
+					On("Update",
+						suite.ctx,
+						mock.MatchedBy(verifyUpdateFunction),
+						metav1.UpdateOptions{}).
 					Return(getFunctionResponse, nil).
 					Once()
 				defer suite.nuclioFunctionInterfaceMock.AssertExpectations(suite.T())
 			}
 
-			err := suite.Platform.UpdateFunction(&platform.UpdateFunctionOptions{
+			err := suite.Platform.UpdateFunction(suite.ctx, &platform.UpdateFunctionOptions{
 				FunctionMeta: &functionconfig.Meta{
 					Name:      functionName,
 					Namespace: suite.Namespace,
@@ -782,7 +794,7 @@ func (suite *FunctionKubePlatformTestSuite) TestDeleteFunctionPermissions() {
 			}
 
 			suite.mockedPlatform.
-				On("GetFunctions", &platform.GetFunctionsOptions{
+				On("GetFunctions", suite.ctx, &platform.GetFunctionsOptions{
 					Name:      functionName,
 					Namespace: suite.Namespace,
 					PermissionOptions: opa.PermissionOptions{
@@ -809,19 +821,19 @@ func (suite *FunctionKubePlatformTestSuite) TestDeleteFunctionPermissions() {
 
 			if testCase.opaResponse {
 				suite.nuclioAPIGatewayInterfaceMock.
-					On("List", metav1.ListOptions{}).
+					On("List", suite.ctx, metav1.ListOptions{}).
 					Return(&v1beta1.NuclioAPIGatewayList{}, nil).
 					Once()
 				defer suite.nuclioAPIGatewayInterfaceMock.AssertExpectations(suite.T())
 
 				suite.nuclioFunctionInterfaceMock.
-					On("Delete", functionName, &metav1.DeleteOptions{}).
+					On("Delete", suite.ctx, functionName, metav1.DeleteOptions{}).
 					Return(nil).
 					Once()
 				defer suite.nuclioFunctionInterfaceMock.AssertExpectations(suite.T())
 			}
 
-			err := suite.Platform.DeleteFunction(&platform.DeleteFunctionOptions{
+			err := suite.Platform.DeleteFunction(suite.ctx, &platform.DeleteFunctionOptions{
 				FunctionConfig: functionconfig.Config{
 					Meta: functionconfig.Meta{
 						Name:      functionName,
@@ -853,7 +865,7 @@ func (suite *FunctionKubePlatformTestSuite) TestRenderFunctionIngress() {
 		want        map[string]interface{}
 	}{
 		{
-			name: "nothingToDo",
+			name: "nothingBackground",
 			httpTrigger: functionconfig.Trigger{
 				Name: "http-trigger",
 				Kind: "http",
@@ -880,6 +892,7 @@ func (suite *FunctionKubePlatformTestSuite) TestRenderFunctionIngress() {
 				"0": map[string]interface{}{
 					"hostTemplate": "{{ .ResourceName }}.custom.test.com",
 					"host":         "some-name.custom.test.com",
+					"pathType":     networkingv1.PathTypeImplementationSpecific,
 				},
 			},
 		},
@@ -900,6 +913,7 @@ func (suite *FunctionKubePlatformTestSuite) TestRenderFunctionIngress() {
 				"0": map[string]interface{}{
 					"hostTemplate": "@nuclio.fromDefault",
 					"host":         "some-name.some-namespace.test.com",
+					"pathType":     networkingv1.PathTypeImplementationSpecific,
 				},
 			},
 		},
@@ -923,9 +937,11 @@ func (suite *FunctionKubePlatformTestSuite) TestRenderFunctionIngress() {
 				"0": map[string]interface{}{
 					"hostTemplate": "@nuclio.fromDefault",
 					"host":         "some-name.some-namespace.test.com",
+					"pathType":     networkingv1.PathTypeImplementationSpecific,
 				},
 				"1": map[string]interface{}{
-					"host": "leave-it-as.is.com",
+					"host":     "leave-it-as.is.com",
+					"pathType": networkingv1.PathTypeImplementationSpecific,
 				},
 			},
 		},
@@ -947,6 +963,7 @@ func (suite *FunctionKubePlatformTestSuite) TestRenderFunctionIngress() {
 				"0": map[string]interface{}{
 					"hostTemplate": "@nuclio.fromDefault",
 					"host":         "some-name.some-namespace.test.com",
+					"pathType":     networkingv1.PathTypeImplementationSpecific,
 				},
 			},
 		},
@@ -968,6 +985,7 @@ func (suite *FunctionKubePlatformTestSuite) TestRenderFunctionIngress() {
 				"0": map[string]interface{}{
 					"hostTemplate": "@nuclio.fromDefault",
 					"host":         "dont-override-me.com",
+					"pathType":     networkingv1.PathTypeImplementationSpecific,
 				},
 			},
 		},
@@ -984,7 +1002,7 @@ func (suite *FunctionKubePlatformTestSuite) TestRenderFunctionIngress() {
 					},
 				},
 			}
-			err := suite.Platform.enrichHTTPTriggers(functionConfig)
+			err := suite.Platform.enrichHTTPTriggers(suite.ctx, functionConfig)
 			suite.Require().NoError(err)
 			suite.Require().Equal(testCase.want,
 				functionConfig.Spec.Triggers[testCase.httpTrigger.Name].Attributes["ingresses"])
@@ -1024,6 +1042,35 @@ func (suite *FunctionKubePlatformTestSuite) TestAlignIngressHostSubdomain() {
 			suite.Require().Regexp(testCase.want, alignedIngressHostSubdomain)
 		})
 	}
+}
+
+func (suite *FunctionKubePlatformTestSuite) TestEnrichFunctionWithUserNameLabel() {
+
+	functionName := "some-func"
+	functionConfig := *functionconfig.NewConfig()
+	authSession := auth.IguazioSession{
+		Username: "some-user",
+	}
+
+	// inject auth session to context
+	ctx := context.WithValue(suite.ctx, auth.AuthSessionContextKey, authSession)
+
+	createFunctionOptions := &platform.CreateFunctionOptions{
+		Logger:         suite.Logger,
+		FunctionConfig: functionConfig,
+		AuthSession:    &authSession,
+	}
+	createFunctionOptions.FunctionConfig.Meta.Name = functionName
+	createFunctionOptions.FunctionConfig.Meta.Labels = map[string]string{
+		"nuclio.io/project-name": platform.DefaultProjectName,
+	}
+
+	suite.Logger.DebugWith("Enriching function", "functionName", functionName)
+
+	err := suite.Platform.EnrichFunctionConfig(ctx, &createFunctionOptions.FunctionConfig)
+	suite.Require().NoError(err)
+
+	suite.Require().Equal("some-user", createFunctionOptions.FunctionConfig.Meta.Labels[iguazio.IguzioUsernameLabel])
 }
 
 type FunctionEventKubePlatformTestSuite struct {
@@ -1081,7 +1128,7 @@ func (suite *FunctionEventKubePlatformTestSuite) TestGetFunctionEventsPermission
 			}
 
 			suite.nuclioFunctionEventInterfaceMock.
-				On("Get", functionEventName, metav1.GetOptions{}).
+				On("Get", suite.ctx, functionEventName, metav1.GetOptions{}).
 				Return(getFunctionEventResponse, nil).
 				Once()
 			defer suite.nuclioFunctionEventInterfaceMock.AssertExpectations(suite.T())
@@ -1104,7 +1151,7 @@ func (suite *FunctionEventKubePlatformTestSuite) TestGetFunctionEventsPermission
 					Once()
 				defer suite.mockedOpaClient.AssertExpectations(suite.T())
 			}
-			functionEvents, err := suite.Platform.GetFunctionEvents(&platform.GetFunctionEventsOptions{
+			functionEvents, err := suite.Platform.GetFunctionEvents(suite.ctx, &platform.GetFunctionEventsOptions{
 				Meta: platform.FunctionEventMeta{
 					Name:      functionEventName,
 					Namespace: suite.Namespace,
@@ -1164,7 +1211,7 @@ func (suite *FunctionEventKubePlatformTestSuite) TestUpdateFunctionEventPermissi
 			}
 
 			suite.nuclioFunctionEventInterfaceMock.
-				On("Get", functionEventName, metav1.GetOptions{}).
+				On("Get", suite.ctx, functionEventName, metav1.GetOptions{}).
 				Return(getFunctionEventResponse, nil).
 				Once()
 			defer suite.nuclioFunctionEventInterfaceMock.AssertExpectations(suite.T())
@@ -1196,14 +1243,17 @@ func (suite *FunctionEventKubePlatformTestSuite) TestUpdateFunctionEventPermissi
 				}
 
 				suite.nuclioFunctionEventInterfaceMock.
-					On("Update", mock.MatchedBy(verifyUpdateFunctionEvent)).
+					On("Update",
+						suite.ctx,
+						mock.MatchedBy(verifyUpdateFunctionEvent),
+						metav1.UpdateOptions{}).
 					Return(getFunctionEventResponse, nil).
 					Once()
 
 				defer suite.nuclioFunctionEventInterfaceMock.AssertExpectations(suite.T())
 			}
 
-			err := suite.Platform.UpdateFunctionEvent(&platform.UpdateFunctionEventOptions{
+			err := suite.Platform.UpdateFunctionEvent(suite.ctx, &platform.UpdateFunctionEventOptions{
 				FunctionEventConfig: platform.FunctionEventConfig{
 					Meta: platform.FunctionEventMeta{
 						Name:      functionEventName,
@@ -1262,7 +1312,7 @@ func (suite *FunctionEventKubePlatformTestSuite) TestDeleteFunctionEventPermissi
 			}
 
 			suite.nuclioFunctionEventInterfaceMock.
-				On("Get", functionEventName, metav1.GetOptions{}).
+				On("Get", suite.ctx, functionEventName, metav1.GetOptions{}).
 				Return(getFunctionEventResponse, nil).
 				Once()
 			defer suite.nuclioFunctionEventInterfaceMock.AssertExpectations(suite.T())
@@ -1286,13 +1336,13 @@ func (suite *FunctionEventKubePlatformTestSuite) TestDeleteFunctionEventPermissi
 			if testCase.opaResponse {
 
 				suite.nuclioFunctionEventInterfaceMock.
-					On("Delete", functionEventName, &metav1.DeleteOptions{}).
+					On("Delete", suite.ctx, functionEventName, metav1.DeleteOptions{}).
 					Return(nil).
 					Once()
 				defer suite.nuclioFunctionEventInterfaceMock.AssertExpectations(suite.T())
 			}
 
-			err := suite.Platform.DeleteFunctionEvent(&platform.DeleteFunctionEventOptions{
+			err := suite.Platform.DeleteFunctionEvent(suite.ctx, &platform.DeleteFunctionEventOptions{
 				Meta: platform.FunctionEventMeta{
 					Name:      functionEventName,
 					Namespace: suite.Namespace,
@@ -1320,7 +1370,7 @@ func (suite *APIGatewayKubePlatformTestSuite) TestAPIGatewayEnrichmentAndValidat
 
 	// return empty api gateways list on enrichFunctionsWithAPIGateways (not tested here)
 	suite.nuclioAPIGatewayInterfaceMock.
-		On("List", metav1.ListOptions{}).
+		On("List", suite.ctx, metav1.ListOptions{}).
 		Return(&v1beta1.NuclioAPIGatewayList{}, nil)
 
 	for _, testCase := range []struct {
@@ -1340,6 +1390,9 @@ func (suite *APIGatewayKubePlatformTestSuite) TestAPIGatewayEnrichmentAndValidat
 
 		// keep empty when shouldn't fail
 		validationError string
+
+		// keep empty when not verifying session enrichment
+		authSession *auth.IguazioSession
 	}{
 		{
 			name: "SpecNameEnrichedFromMetaName",
@@ -1370,6 +1423,23 @@ func (suite *APIGatewayKubePlatformTestSuite) TestAPIGatewayEnrichmentAndValidat
 				apiGatewayConfig.Meta.Name = "spec-name"
 				return &apiGatewayConfig
 			}(),
+		},
+		{
+			name: "UserNameEnrichedFromSession",
+			apiGatewayConfig: func() *platform.APIGatewayConfig {
+				apiGatewayConfig := suite.compileAPIGatewayConfig()
+				return &apiGatewayConfig
+			}(),
+			expectedEnrichedAPIGateway: func() *platform.APIGatewayConfig {
+				apiGatewayConfig := suite.compileAPIGatewayConfig()
+				apiGatewayConfig.Meta.Labels = map[string]string{
+					iguazio.IguzioUsernameLabel: "some-username",
+				}
+				return &apiGatewayConfig
+			}(),
+			authSession: &auth.IguazioSession{
+				Username: "some-username",
+			},
 		},
 		{
 			name: "ValidateNamespaceExistence",
@@ -1530,18 +1600,18 @@ func (suite *APIGatewayKubePlatformTestSuite) TestAPIGatewayEnrichmentAndValidat
 		{
 			name: "PathIsAvailable",
 			setUpFunction: func() error {
-				suite.kubeClientSet = *fake.NewSimpleClientset(&extensionsv1beta1.Ingress{
+				suite.kubeClientSet = *fake.NewSimpleClientset(&networkingv1.Ingress{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "some-name",
 						Namespace: suite.Namespace,
 					},
-					Spec: extensionsv1beta1.IngressSpec{
-						Rules: []extensionsv1beta1.IngressRule{
+					Spec: networkingv1.IngressSpec{
+						Rules: []networkingv1.IngressRule{
 							{
 								Host: "this-host-and-path-are-used.com",
-								IngressRuleValue: extensionsv1beta1.IngressRuleValue{
-									HTTP: &extensionsv1beta1.HTTPIngressRuleValue{
-										Paths: []extensionsv1beta1.HTTPIngressPath{
+								IngressRuleValue: networkingv1.IngressRuleValue{
+									HTTP: &networkingv1.HTTPIngressRuleValue{
+										Paths: []networkingv1.HTTPIngressPath{
 											{
 												Path: "different-path/",
 											},
@@ -1568,18 +1638,18 @@ func (suite *APIGatewayKubePlatformTestSuite) TestAPIGatewayEnrichmentAndValidat
 		{
 			name: "FailPathInUse",
 			setUpFunction: func() error {
-				suite.kubeClientSet = *fake.NewSimpleClientset(&extensionsv1beta1.Ingress{
+				suite.kubeClientSet = *fake.NewSimpleClientset(&networkingv1.Ingress{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "some-name",
 						Namespace: suite.Namespace,
 					},
-					Spec: extensionsv1beta1.IngressSpec{
-						Rules: []extensionsv1beta1.IngressRule{
+					Spec: networkingv1.IngressSpec{
+						Rules: []networkingv1.IngressRule{
 							{
 								Host: "this-host-and-path-are-used.com",
-								IngressRuleValue: extensionsv1beta1.IngressRuleValue{
-									HTTP: &extensionsv1beta1.HTTPIngressRuleValue{
-										Paths: []extensionsv1beta1.HTTPIngressPath{
+								IngressRuleValue: networkingv1.IngressRuleValue{
+									HTTP: &networkingv1.HTTPIngressRuleValue{
+										Paths: []networkingv1.HTTPIngressPath{
 											{
 												Path: "same-path/",
 											},
@@ -1635,7 +1705,10 @@ func (suite *APIGatewayKubePlatformTestSuite) TestAPIGatewayEnrichmentAndValidat
 				if testCase.expectedEnrichedAPIGateway.Meta.Labels == nil {
 					testCase.expectedEnrichedAPIGateway.Meta.Labels = map[string]string{}
 				}
-				suite.Platform.EnrichLabelsWithProjectName(testCase.expectedEnrichedAPIGateway.Meta.Labels)
+				if testCase.authSession != nil {
+					suite.ctx = context.WithValue(suite.ctx, auth.AuthSessionContextKey, *testCase.authSession)
+				}
+				suite.Platform.EnrichLabels(suite.ctx, testCase.expectedEnrichedAPIGateway.Meta.Labels)
 			}
 
 			// run test case specific set up function if given
@@ -1645,7 +1718,7 @@ func (suite *APIGatewayKubePlatformTestSuite) TestAPIGatewayEnrichmentAndValidat
 			}
 
 			// run enrichment
-			suite.Platform.enrichAPIGatewayConfig(testCase.apiGatewayConfig, nil)
+			suite.Platform.enrichAPIGatewayConfig(suite.ctx, testCase.apiGatewayConfig, nil)
 			if testCase.expectedEnrichedAPIGateway != nil {
 				suite.Require().Empty(cmp.Diff(testCase.expectedEnrichedAPIGateway, testCase.apiGatewayConfig))
 			}
@@ -1666,13 +1739,13 @@ func (suite *APIGatewayKubePlatformTestSuite) TestAPIGatewayEnrichmentAndValidat
 				}
 
 				suite.nuclioFunctionInterfaceMock.
-					On("Get", upstream.NuclioFunction.Name, metav1.GetOptions{}).
+					On("Get", suite.ctx, upstream.NuclioFunction.Name, metav1.GetOptions{}).
 					Return(upstreamFunction, getFunctionsError).
 					Once()
 			}
 
 			// run validation
-			err := suite.Platform.validateAPIGatewayConfig(testCase.apiGatewayConfig,
+			err := suite.Platform.validateAPIGatewayConfig(suite.ctx, testCase.apiGatewayConfig,
 				testCase.validateFunctionsExistence,
 				nil)
 			if testCase.validationError != "" {
@@ -1725,7 +1798,7 @@ func (suite *APIGatewayKubePlatformTestSuite) TestAPIGatewayUpdate() {
 
 			// get before update
 			suite.nuclioAPIGatewayInterfaceMock.
-				On("Get", apiGatewayConfig.Meta.Name, metav1.GetOptions{}).
+				On("Get", suite.ctx, apiGatewayConfig.Meta.Name, metav1.GetOptions{}).
 				Return(&v1beta1.NuclioAPIGateway{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      apiGatewayConfig.Meta.Name,
@@ -1749,23 +1822,25 @@ func (suite *APIGatewayKubePlatformTestSuite) TestAPIGatewayUpdate() {
 
 			// mock kubernetes update
 			suite.nuclioAPIGatewayInterfaceMock.
-				On("Update", mock.MatchedBy(verifyAPIGatewayToUpdate)).
-				Return(func(apiGateway *v1beta1.NuclioAPIGateway) *v1beta1.NuclioAPIGateway {
-
-					// nothing really to do here, let Kubernetes do the actual upgrade
-					return apiGateway
-				}, nil).
+				On("Update",
+					suite.ctx,
+					mock.MatchedBy(verifyAPIGatewayToUpdate),
+					mock.Anything).
+				Return(&v1beta1.NuclioAPIGateway{}, nil).
 				Once()
 
 			// no function with matching upstreams
 			suite.nuclioFunctionInterfaceMock.
-				On("Get", apiGatewayConfig.Spec.Upstreams[0].NuclioFunction.Name, metav1.GetOptions{}).
+				On("Get",
+					suite.ctx,
+					apiGatewayConfig.Spec.Upstreams[0].NuclioFunction.Name,
+					metav1.GetOptions{}).
 				Return(nil,
 					&apierrors.StatusError{ErrStatus: metav1.Status{Reason: metav1.StatusReasonNotFound}}).
 				Once()
 
 			// update
-			err := suite.Platform.UpdateAPIGateway(updateAPIGatewayOptions)
+			err := suite.Platform.UpdateAPIGateway(suite.ctx, updateAPIGatewayOptions)
 			suite.Require().NoError(err)
 		})
 	}

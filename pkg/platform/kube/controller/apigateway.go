@@ -41,7 +41,8 @@ type apiGatewayOperator struct {
 	operator   operator.Operator
 }
 
-func newAPIGatewayOperator(parentLogger logger.Logger,
+func newAPIGatewayOperator(ctx context.Context,
+	parentLogger logger.Logger,
 	controller *Controller,
 	resyncInterval *time.Duration,
 	numWorkers int) (*apiGatewayOperator, error) {
@@ -55,9 +56,10 @@ func newAPIGatewayOperator(parentLogger logger.Logger,
 	}
 
 	// create an api gateway operator
-	newAPIGatewayOperator.operator, err = operator.NewMultiWorker(loggerInstance,
+	newAPIGatewayOperator.operator, err = operator.NewMultiWorker(ctx,
+		loggerInstance,
 		numWorkers,
-		newAPIGatewayOperator.getListWatcher(controller.namespace),
+		newAPIGatewayOperator.getListWatcher(ctx, controller.namespace),
 		&nuclioio.NuclioAPIGateway{},
 		resyncInterval,
 		newAPIGatewayOperator)
@@ -66,7 +68,7 @@ func newAPIGatewayOperator(parentLogger logger.Logger,
 		return nil, errors.Wrap(err, "Failed to create api gateway operator")
 	}
 
-	parentLogger.DebugWith("Created api gateway operator",
+	parentLogger.DebugWithCtx(ctx, "Created api gateway operator",
 		"numWorkers", numWorkers,
 		"resyncInterval", resyncInterval)
 
@@ -84,7 +86,7 @@ func (ago *apiGatewayOperator) CreateOrUpdate(ctx context.Context, object runtim
 
 	// validate the state is inside states to respond to
 	if !ago.shouldRespondToState(apiGateway.Status.State) {
-		ago.logger.DebugWith("Api gateway state is not waiting for creation/update, skipping create/update",
+		ago.logger.DebugWithCtx(ctx, "Api gateway state is not waiting for creation/update, skipping create/update",
 			"name", apiGateway.Spec.Name,
 			"state", apiGateway.Status.State)
 		return nil
@@ -110,9 +112,9 @@ func (ago *apiGatewayOperator) CreateOrUpdate(ctx context.Context, object runtim
 
 	// create/update the api gateway
 	if _, err = ago.controller.apigatewayresClient.CreateOrUpdate(ctx, apiGateway); err != nil {
-		ago.logger.WarnWith("Failed to create/update api gateway. Updating state accordingly")
-		if err := ago.setAPIGatewayState(apiGateway, platform.APIGatewayStateError, err); err != nil {
-			ago.logger.WarnWith("Failed to set api gateway state as error", "err", err)
+		ago.logger.WarnWithCtx(ctx, "Failed to create/update api gateway. Updating state accordingly")
+		if err := ago.setAPIGatewayState(ctx, apiGateway, platform.APIGatewayStateError, err); err != nil {
+			ago.logger.WarnWithCtx(ctx, "Failed to set api gateway state as error", "err", err)
 		}
 
 		return errors.Wrap(err, "Failed to create/update api gateway")
@@ -122,11 +124,11 @@ func (ago *apiGatewayOperator) CreateOrUpdate(ctx context.Context, object runtim
 	ago.controller.apigatewayresClient.WaitAvailable(ctx, apiGateway.Namespace, apiGateway.Name)
 
 	// set state to ready
-	if err := ago.setAPIGatewayState(apiGateway, platform.APIGatewayStateReady, nil); err != nil {
+	if err := ago.setAPIGatewayState(ctx, apiGateway, platform.APIGatewayStateReady, nil); err != nil {
 		return errors.Wrap(err, "Failed to set api gateway state after it was successfully created")
 	}
 
-	ago.logger.DebugWith("Successfully created/updated api gateway", "apiGateway", apiGateway)
+	ago.logger.DebugWithCtx(ctx, "Successfully created/updated api gateway", "apiGateway", apiGateway)
 
 	return nil
 }
@@ -134,17 +136,16 @@ func (ago *apiGatewayOperator) CreateOrUpdate(ctx context.Context, object runtim
 // Delete handles delete of an object
 func (ago *apiGatewayOperator) Delete(ctx context.Context, namespace string, name string) error {
 	ago.controller.apigatewayresClient.Delete(ctx, namespace, name)
-
 	return nil
 }
 
-func (ago *apiGatewayOperator) getListWatcher(namespace string) cache.ListerWatcher {
+func (ago *apiGatewayOperator) getListWatcher(ctx context.Context, namespace string) cache.ListerWatcher {
 	return &cache.ListWatch{
 		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
-			return ago.controller.nuclioClientSet.NuclioV1beta1().NuclioAPIGateways(namespace).List(options)
+			return ago.controller.nuclioClientSet.NuclioV1beta1().NuclioAPIGateways(namespace).List(ctx, options)
 		},
 		WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
-			return ago.controller.nuclioClientSet.NuclioV1beta1().NuclioAPIGateways(namespace).Watch(options)
+			return ago.controller.nuclioClientSet.NuclioV1beta1().NuclioAPIGateways(namespace).Watch(ctx, options)
 		},
 	}
 }
@@ -158,10 +159,11 @@ func (ago *apiGatewayOperator) shouldRespondToState(state platform.APIGatewaySta
 	return common.StringSliceContainsString(statesToRespond, string(state))
 }
 
-func (ago *apiGatewayOperator) setAPIGatewayState(apiGateway *nuclioio.NuclioAPIGateway,
+func (ago *apiGatewayOperator) setAPIGatewayState(ctx context.Context,
+	apiGateway *nuclioio.NuclioAPIGateway,
 	state platform.APIGatewayState,
 	lastError error) error {
-	ago.logger.DebugWith("Setting api gateway state", "name", apiGateway.Name, "state", state)
+	ago.logger.DebugWithCtx(ctx, "Setting api gateway state", "name", apiGateway.Name, "state", state)
 
 	apiGateway.Status.State = state
 
@@ -171,12 +173,14 @@ func (ago *apiGatewayOperator) setAPIGatewayState(apiGateway *nuclioio.NuclioAPI
 	}
 
 	// try to update the api gateway with the new state
-	_, err := ago.controller.nuclioClientSet.NuclioV1beta1().NuclioAPIGateways(apiGateway.Namespace).Update(apiGateway)
+	_, err := ago.controller.nuclioClientSet.NuclioV1beta1().NuclioAPIGateways(apiGateway.Namespace).Update(ctx,
+		apiGateway,
+		metav1.UpdateOptions{})
 	return err
 }
 
-func (ago *apiGatewayOperator) start() error {
-	go ago.operator.Start() // nolint: errcheck
+func (ago *apiGatewayOperator) start(ctx context.Context) error {
+	go ago.operator.Start(ctx) // nolint: errcheck
 
 	return nil
 }

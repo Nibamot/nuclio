@@ -1,6 +1,7 @@
 package kube
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -38,7 +39,7 @@ func (c *Client) Initialize() error {
 	return nil
 }
 
-func (c *Client) Get(getProjectsOptions *platform.GetProjectsOptions) ([]platform.Project, error) {
+func (c *Client) Get(ctx context.Context, getProjectsOptions *platform.GetProjectsOptions) ([]platform.Project, error) {
 	var platformProjects []platform.Project
 	var projects []nuclioio.NuclioProject
 
@@ -48,7 +49,7 @@ func (c *Client) Get(getProjectsOptions *platform.GetProjectsOptions) ([]platfor
 		// get specific NuclioProject CR
 		projectInstance, err := c.consumer.NuclioClientSet.NuclioV1beta1().
 			NuclioProjects(getProjectsOptions.Meta.Namespace).
-			Get(getProjectsOptions.Meta.Name, metav1.GetOptions{})
+			Get(ctx, getProjectsOptions.Meta.Name, metav1.GetOptions{})
 
 		if err != nil {
 
@@ -66,7 +67,7 @@ func (c *Client) Get(getProjectsOptions *platform.GetProjectsOptions) ([]platfor
 
 		projectInstanceList, err := c.consumer.NuclioClientSet.NuclioV1beta1().
 			NuclioProjects(getProjectsOptions.Meta.Namespace).
-			List(metav1.ListOptions{LabelSelector: ""})
+			List(ctx, metav1.ListOptions{LabelSelector: ""})
 		if err != nil {
 			return nil, errors.Wrap(err, "Failed to list projects")
 		}
@@ -90,13 +91,13 @@ func (c *Client) Get(getProjectsOptions *platform.GetProjectsOptions) ([]platfor
 	return platformProjects, nil
 }
 
-func (c *Client) Create(createProjectOptions *platform.CreateProjectOptions) (platform.Project, error) {
+func (c *Client) Create(ctx context.Context, createProjectOptions *platform.CreateProjectOptions) (platform.Project, error) {
 	newProject := nuclioio.NuclioProject{}
 	c.platformProjectToProject(createProjectOptions.ProjectConfig, &newProject)
 
 	nuclioProject, err := c.consumer.NuclioClientSet.NuclioV1beta1().
 		NuclioProjects(newProject.Namespace).
-		Create(&newProject)
+		Create(ctx, &newProject, metav1.CreateOptions{})
 	if err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			return nil, nuclio.WrapErrConflict(err)
@@ -107,10 +108,10 @@ func (c *Client) Create(createProjectOptions *platform.CreateProjectOptions) (pl
 	return c.nuclioProjectToPlatformProject(nuclioProject)
 }
 
-func (c *Client) Update(updateProjectOptions *platform.UpdateProjectOptions) (platform.Project, error) {
+func (c *Client) Update(ctx context.Context, updateProjectOptions *platform.UpdateProjectOptions) (platform.Project, error) {
 	projectInstance, err := c.consumer.NuclioClientSet.NuclioV1beta1().
 		NuclioProjects(updateProjectOptions.ProjectConfig.Meta.Namespace).
-		Get(updateProjectOptions.ProjectConfig.Meta.Name, metav1.GetOptions{})
+		Get(ctx, updateProjectOptions.ProjectConfig.Meta.Name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, nuclio.WrapErrNotFound(err)
@@ -129,7 +130,7 @@ func (c *Client) Update(updateProjectOptions *platform.UpdateProjectOptions) (pl
 
 	nuclioProject, err := c.consumer.NuclioClientSet.NuclioV1beta1().
 		NuclioProjects(projectInstance.Namespace).
-		Update(projectInstance)
+		Update(ctx, projectInstance, metav1.UpdateOptions{})
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to update nuclio project")
 	}
@@ -137,10 +138,10 @@ func (c *Client) Update(updateProjectOptions *platform.UpdateProjectOptions) (pl
 	return c.nuclioProjectToPlatformProject(nuclioProject)
 }
 
-func (c *Client) Delete(deleteProjectOptions *platform.DeleteProjectOptions) error {
+func (c *Client) Delete(ctx context.Context, deleteProjectOptions *platform.DeleteProjectOptions) error {
 	if err := c.consumer.NuclioClientSet.NuclioV1beta1().
 		NuclioProjects(deleteProjectOptions.Meta.Namespace).
-		Delete(deleteProjectOptions.Meta.Name, &metav1.DeleteOptions{}); err != nil {
+		Delete(ctx, deleteProjectOptions.Meta.Name, metav1.DeleteOptions{}); err != nil {
 
 		if apierrors.IsNotFound(err) {
 			return nuclio.NewErrNotFound(fmt.Sprintf("Project %s not found", deleteProjectOptions.Meta.Name))
@@ -152,7 +153,8 @@ func (c *Client) Delete(deleteProjectOptions *platform.DeleteProjectOptions) err
 	}
 
 	if deleteProjectOptions.WaitForResourcesDeletionCompletion {
-		return c.platform.WaitForProjectResourcesDeletion(&deleteProjectOptions.Meta,
+		return c.platform.WaitForProjectResourcesDeletion(ctx,
+			&deleteProjectOptions.Meta,
 			deleteProjectOptions.WaitForResourcesDeletionCompletionDuration)
 	}
 
